@@ -108,10 +108,11 @@ coreos:
         After=kube-apiserver.service
 
         [Service]
+        EnvironmentFile=/etc/kubernetes-master-params
         ExecStart=/opt/kubernetes/server/bin/kube-controller-manager \
             --master=127.0.0.1:8080 \
             --cloud_provider=gce \
-            --minion_regexp='kubernetes-minion.*' \
+            --minion_regexp='${NODE_INSTANCE_PREFIX}.*' \
             --logtostderr=true
         Restart=always
         RestartSec=10
