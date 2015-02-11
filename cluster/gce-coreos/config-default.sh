@@ -17,17 +17,17 @@
 # TODO(jbeda): Provide a way to override project
 # gcloud multiplexing for shared GCE/GKE tests.
 GCLOUD=gcloud
-ZONE=${KUBE_GCE_ZONE:-us-central1-b}
+ZONE=${KUBE_GCE_ZONE:-asia-east1-a}
 MASTER_SIZE=n1-standard-1
 MINION_SIZE=n1-standard-1
-NUM_MINIONS=${NUM_MINIONS:-4}
+NUM_MINIONS=${NUM_MINIONS:-1}
 MINION_DISK_TYPE=pd-standard
 MINION_DISK_SIZE=10GB
 # TODO(dchen1107): Filed an internal issue to create an alias
 # for containervm image, so that gcloud will expand this
 # to the latest supported image.
-IMAGE=container-vm-v20150129
-IMAGE_PROJECT=google-containers
+IMAGE=coreos-stable-522-6-0-v20150128
+IMAGE_PROJECT=coreos-cloud
 NETWORK=${KUBE_GCE_NETWORK:-default}
 INSTANCE_PREFIX="${KUBE_GCE_INSTANCE_PREFIX:-kubernetes}"
 MASTER_NAME="${INSTANCE_PREFIX}-master"
@@ -85,24 +85,24 @@ PORTAL_NET="10.0.0.0/16"
 ENABLE_DOCKER_REGISTRY_CACHE=true
 
 # Optional: Install node monitoring.
-ENABLE_NODE_MONITORING="${KUBE_ENABLE_NODE_MONITORING:-true}"
+ENABLE_NODE_MONITORING="${KUBE_ENABLE_NODE_MONITORING:-false}"
 
 # Optional: When set to true, heapster will be setup as part of the cluster bring up.
-ENABLE_CLUSTER_MONITORING="${KUBE_ENABLE_CLUSTER_MONITORING:-true}"
+ENABLE_CLUSTER_MONITORING="${KUBE_ENABLE_CLUSTER_MONITORING:-false}"
 
 # Optional: Enable node logging.
-ENABLE_NODE_LOGGING="${KUBE_ENABLE_NODE_LOGGING:-true}"
+ENABLE_NODE_LOGGING="${KUBE_ENABLE_NODE_LOGGING:-false}"
 LOGGING_DESTINATION="${KUBE_LOGGING_DESTINATION:-elasticsearch}" # options: elasticsearch, gcp
 
 # Optional: When set to true, Elasticsearch and Kibana will be setup as part of the cluster bring up.
-ENABLE_CLUSTER_LOGGING="${KUBE_ENABLE_CLUSTER_LOGGING:-true}"
+ENABLE_CLUSTER_LOGGING="${KUBE_ENABLE_CLUSTER_LOGGING:-false}"
 ELASTICSEARCH_LOGGING_REPLICAS=1
 
 # Don't require https for registries in our local RFC1918 network
 EXTRA_DOCKER_OPTS="--insecure-registry 10.0.0.0/8"
 
 # Optional: Install cluster DNS.
-ENABLE_CLUSTER_DNS=true
+ENABLE_CLUSTER_DNS=false
 DNS_SERVER_IP="10.0.0.10"
 DNS_DOMAIN="kubernetes.local"
 DNS_REPLICAS=1

@@ -19,7 +19,7 @@
 # Use the config file specified in $KUBE_CONFIG_FILE, or default to
 # config-default.sh.
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/../..
-source "${KUBE_ROOT}/cluster/gce/${KUBE_CONFIG_FILE-"config-default.sh"}"
+source "${KUBE_ROOT}/cluster/gce-coreos/${KUBE_CONFIG_FILE-"config-default.sh"}"
 
 # Verify prereqs
 function verify-prereqs {
@@ -129,13 +129,19 @@ function upload-server-tars() {
   local server_binary_gs_url="${staging_path}/${SERVER_BINARY_TAR##*/}"
   gsutil -q -h "Cache-Control:private, max-age=0" cp "${SERVER_BINARY_TAR}" "${server_binary_gs_url}"
   gsutil acl ch -g all:R "${server_binary_gs_url}" >/dev/null 2>&1
-  local salt_gs_url="${staging_path}/${SALT_TAR##*/}"
-  gsutil -q -h "Cache-Control:private, max-age=0" cp "${SALT_TAR}" "${salt_gs_url}"
-  gsutil acl ch -g all:R "${salt_gs_url}" >/dev/null 2>&1
+  
+  echo
+  echo "+++ NOT uploading Salt tars!"
+  echo
+
+  # XXX SALT_TAR will be unset when deadling with CoreOS
+  # local salt_gs_url="${staging_path}/${SALT_TAR##*/}"
+  # gsutil -q -h "Cache-Control:private, max-age=0" cp "${SALT_TAR}" "${salt_gs_url}"
+  # gsutil acl ch -g all:R "${salt_gs_url}" >/dev/null 2>&1
 
   # Convert from gs:// URL to an https:// URL
   SERVER_BINARY_TAR_URL="${server_binary_gs_url/gs:\/\//https://storage.googleapis.com/}"
-  SALT_TAR_URL="${salt_gs_url/gs:\/\//https://storage.googleapis.com/}"
+  # SALT_TAR_URL="${salt_gs_url/gs:\/\//https://storage.googleapis.com/}"
 }
 
 # Detect the information about the minions
@@ -173,6 +179,7 @@ function detect-minions () {
 # Vars set:
 #   KUBE_MASTER
 #   KUBE_MASTER_IP
+#   KUBERNETES_MASTER_HOSTPORT
 function detect-master () {
   detect-project
   KUBE_MASTER=${MASTER_NAME}
@@ -186,6 +193,7 @@ function detect-master () {
     exit 1
   fi
   echo "Using master: $KUBE_MASTER (external IP: $KUBE_MASTER_IP)"
+  export KUBERNETES_MASTER_HOSTPORT="http://${KUBE_MASTER_IP}:8080"
 }
 
 # Ensure that we have a password created for validating to the master.  Will
@@ -198,16 +206,20 @@ function detect-master () {
 #   KUBE_USER
 #   KUBE_PASSWORD
 function get-password {
+  # XXX We do not use username password for the prototype using CoreOS
   # go template to extract the auth-path of the current-context user
-  local template='{{$ctx := index . "current-context"}}{{$user := index . "contexts" $ctx "user"}}{{index . "users" $user "auth-path"}}'
-  local file=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${template}")
-  if [[ -r "$file" ]]; then
-    KUBE_USER=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["User"]')
-    KUBE_PASSWORD=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["Password"]')
-    return
-  fi
-  KUBE_USER=admin
-  KUBE_PASSWORD=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(16))')
+  # local template='{{$ctx := index . "current-context"}}{{$user := index . "contexts" $ctx "user"}}{{index . "users" $user "auth-path"}}'
+  # local file=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${template}")
+  # if [[ -r "$file" ]]; then
+  #  KUBE_USER=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["User"]')
+  #  KUBE_PASSWORD=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["Password"]')
+  #  return
+  # fi
+  # KUBE_USER=admin
+  # KUBE_PASSWORD=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(16))')
+
+  KUBE_USER=""
+  KUBE_PASSWORD=""
 }
 
 # Generate authentication token for admin user. Will
@@ -216,15 +228,17 @@ function get-password {
 # Vars set:
 #   KUBE_ADMIN_TOKEN
 function get-admin-token {
-  local file="$HOME/.kubernetes_auth"
-  if [[ -r "$file" ]]; then
-    KUBE_ADMIN_TOKEN=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["BearerToken"]')
-    return
-  fi
-  KUBE_ADMIN_TOKEN=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(32))')
+  # XXX Not admin token for CoreOS
+
+  #local file="$HOME/.kubernetes_auth"
+  #if [[ -r "$file" ]]; then
+  #  KUBE_ADMIN_TOKEN=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["BearerToken"]')
+  #  return
+  #fi
+  #KUBE_ADMIN_TOKEN=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(32))')
+
+  KUBE_ADMIN_TOKEN=""
 }
-
-
 
 # Wait for background jobs to finish. Exit with
 # an error status if any of the jobs failed.
@@ -295,7 +309,8 @@ function create-route {
 # Robustly try to create an instance.
 # $1: The name of the instance.
 # $2: The scopes flag.
-# $3: The minion start script.
+# $3: The minion params file
+# $4: The minion yaml file (cloud-init compatible).
 function create-minion {
   detect-project
   local attempt=0
@@ -312,7 +327,7 @@ function create-minion {
       --network "${NETWORK}" \
       $2 \
       --can-ip-forward \
-      --metadata-from-file "$3"; then
+      --metadata-from-file "$3" "$4"; then
         if (( attempt > 5 )); then
           echo -e "${color_red}Failed to create instance $1 ${color_norm}"
           exit 2
@@ -326,6 +341,60 @@ function create-minion {
        break
     fi
   done
+}
+
+# Requires:
+#  PROJECT, ZONE, MASTER_NAME,
+#  and an up-and-running master.
+# Provides:
+#  KUBE_MASTER_INTERNAL_IP
+function detect-master-internal-ip {
+  KUBE_MASTER_INTERNAL_IP=$(gcloud compute instances describe \
+    --project "${PROJECT}" --zone "${ZONE}" "${MASTER_NAME}" \
+    --fields networkInterfaces[0].networkIP --format=text \
+    | awk '{ print $2 }')
+}
+
+# Arguments:
+#   i (Specifying the i'th minion)
+# Prereqs:
+#   upload-server-tars
+#   ensure-temp-dir
+#   detect-master-internal-ip
+# Provides:
+#   KUBERNETES_MINION_PARAMS_TMP[$i] and related file.
+function ensure-minion-i-metadata {
+  ensure-temp-dir
+  i="$1"
+  KUBERNETES_MINION_PARAMS_TMP[$i]="${KUBE_TEMP}/kubernetes-minion-params-${i}"
+  (
+    echo "#! /bin/bash"
+    echo "ZONE='${ZONE}'"
+    echo "MASTER_NAME='${MASTER_NAME}'"
+    echo "MINION_IP_RANGE='${MINION_IP_RANGES[$i]}'"
+    echo "EXTRA_DOCKER_OPTS='${EXTRA_DOCKER_OPTS}'"
+    echo "ENABLE_DOCKER_REGISTRY_CACHE='${ENABLE_DOCKER_REGISTRY_CACHE:-false}'"
+    echo "SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
+    echo "KUBE_MASTER_INTERNAL_IP=${KUBE_MASTER_INTERNAL_IP}"
+  ) > "${KUBERNETES_MINION_PARAMS_TMP[$i]}"
+}
+
+# Prereqs:
+#   upload-server-tars
+#   ensure-temp-dir
+# Provides:
+#   KUBERNETES_MASTER_PARAMS_TMP and related file.
+function ensure-master-metadata {
+  export KUBERNETES_MASTER_PARAMS_TMP="${KUBE_TEMP}/kubernetes-master-params"
+  (
+    echo "MASTER_NAME='${MASTER_NAME}'"
+    echo "NODE_INSTANCE_PREFIX='${INSTANCE_PREFIX}-minion'"
+    echo "SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
+    echo "PORTAL_NET='${PORTAL_NET}'"
+    echo "ENABLE_NODE_MONITORING='${ENABLE_NODE_MONITORING:-false}'"
+    echo "ENABLE_NODE_LOGGING='${ENABLE_NODE_LOGGING:-false}'"
+    echo "LOGGING_DESTINATION='${LOGGING_DESTINATION:-}'"
+  ) > "$KUBERNETES_MASTER_PARAMS_TMP"
 }
 
 # Instantiate a kubernetes cluster
@@ -378,49 +447,60 @@ function kube-up {
     --target-tags "${MASTER_TAG}" \
     --allow tcp:443 &
 
-  (
-    echo "#! /bin/bash"
-    echo "mkdir -p /var/cache/kubernetes-install"
-    echo "cd /var/cache/kubernetes-install"
-    echo "readonly MASTER_NAME='${MASTER_NAME}'"
-    echo "readonly NODE_INSTANCE_PREFIX='${INSTANCE_PREFIX}-minion'"
-    echo "readonly SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
-    echo "readonly SALT_TAR_URL='${SALT_TAR_URL}'"
-    echo "readonly MASTER_HTPASSWD='${htpasswd}'"
-    echo "readonly PORTAL_NET='${PORTAL_NET}'"
-    echo "readonly ENABLE_CLUSTER_MONITORING='${ENABLE_CLUSTER_MONITORING:-false}'"
-    echo "readonly ENABLE_NODE_MONITORING='${ENABLE_NODE_MONITORING:-false}'"
-    echo "readonly ENABLE_CLUSTER_LOGGING='${ENABLE_CLUSTER_LOGGING:-false}'"
-    echo "readonly ENABLE_NODE_LOGGING='${ENABLE_NODE_LOGGING:-false}'"
-    echo "readonly LOGGING_DESTINATION='${LOGGING_DESTINATION:-}'"
-    echo "readonly ELASTICSEARCH_LOGGING_REPLICAS='${ELASTICSEARCH_LOGGING_REPLICAS:-}'"
-    echo "readonly ENABLE_CLUSTER_DNS='${ENABLE_CLUSTER_DNS:-false}'"
-    echo "readonly DNS_REPLICAS='${DNS_REPLICAS:-}'"
-    echo "readonly DNS_SERVER_IP='${DNS_SERVER_IP:-}'"
-    echo "readonly DNS_DOMAIN='${DNS_DOMAIN:-}'"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/format-and-mount-pd.sh"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/create-dynamic-salt-files.sh"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/download-release.sh"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/salt-master.sh"
-  ) > "${KUBE_TEMP}/master-start.sh"
+  # FIXME / HACK: IP-based security is a lot weaker than PKI, but it's a lot
+  # easier to set up for now.  This needs to be replaced with something safer.
+  MY_IP=$(curl -s -4 http://icanhazip.com)
+  gcloud compute firewall-rules create "${MASTER_NAME}-http" \
+    --project "${PROJECT}" \
+    --network "${NETWORK}" \
+    --target-tags "${MASTER_TAG}" \
+    --source-ranges "${MY_IP}/32" \
+    --allow tcp:8080 &
+ 
+  #(
+  #  echo "#! /bin/bash"
+  #  echo "mkdir -p /var/cache/kubernetes-install"
+  #  echo "cd /var/cache/kubernetes-install"
+  #  echo "readonly MASTER_NAME='${MASTER_NAME}'"
+  #  echo "readonly NODE_INSTANCE_PREFIX='${INSTANCE_PREFIX}-minion'"
+  #  echo "readonly SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
+  #  echo "readonly SALT_TAR_URL='${SALT_TAR_URL}'"
+  #  echo "readonly MASTER_HTPASSWD='${htpasswd}'"
+  #  echo "readonly PORTAL_NET='${PORTAL_NET}'"
+  #  echo "readonly ENABLE_CLUSTER_MONITORING='${ENABLE_CLUSTER_MONITORING:-false}'"
+  #  echo "readonly ENABLE_NODE_MONITORING='${ENABLE_NODE_MONITORING:-false}'"
+  #  echo "readonly ENABLE_CLUSTER_LOGGING='${ENABLE_CLUSTER_LOGGING:-false}'"
+  #  echo "readonly ENABLE_NODE_LOGGING='${ENABLE_NODE_LOGGING:-false}'"
+  #  echo "readonly LOGGING_DESTINATION='${LOGGING_DESTINATION:-}'"
+  #  echo "readonly ELASTICSEARCH_LOGGING_REPLICAS='${ELASTICSEARCH_LOGGING_REPLICAS:-}'"
+  #  echo "readonly ENABLE_CLUSTER_DNS='${ENABLE_CLUSTER_DNS:-false}'"
+  #  echo "readonly DNS_REPLICAS='${DNS_REPLICAS:-}'"
+  #  echo "readonly DNS_SERVER_IP='${DNS_SERVER_IP:-}'"
+  #  echo "readonly DNS_DOMAIN='${DNS_DOMAIN:-}'"
+  #  grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
+  #  grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/format-and-mount-pd.sh"
+  #  grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/create-dynamic-salt-files.sh"
+  #  grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/download-release.sh"
+  #  grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/salt-master.sh"
+  #) > "${KUBE_TEMP}/master-start.sh"
 
   # Report logging choice (if any).
-  if [[ "${ENABLE_NODE_LOGGING-}" == "true" ]]; then
-    echo "+++ Logging using Fluentd to ${LOGGING_DESTINATION:-unknown}"
-    # For logging to GCP we need to enable some minion scopes.
-    if [[ "${LOGGING_DESTINATION-}" == "gcp" ]]; then
-      MINION_SCOPES+=('https://www.googleapis.com/auth/logging.write')
-    fi
-  fi
+  # if [[ "${ENABLE_NODE_LOGGING-}" == "true" ]]; then
+  #   echo "+++ Logging using Fluentd to ${LOGGING_DESTINATION:-unknown}"
+     # For logging to GCP we need to enable some minion scopes.
+  #   if [[ "${LOGGING_DESTINATION-}" == "gcp" ]]; then
+  #     MINION_SCOPES+=('https://www.googleapis.com/auth/logging.write')
+  #   fi
+  # fi
 
   # We have to make sure the disk is created before creating the master VM, so
   # run this in the foreground.
   gcloud compute disks create "${MASTER_NAME}-pd" \
     --project "${PROJECT}" \
     --zone "${ZONE}" \
-    --size "10GB"
+    --size "10GB" || true
 
+  ensure-master-metadata
   gcloud compute instances create "${MASTER_NAME}" \
     --project "${PROJECT}" \
     --zone "${ZONE}" \
@@ -430,14 +510,16 @@ function kube-up {
     --tags "${MASTER_TAG}" \
     --network "${NETWORK}" \
     --scopes "storage-ro" "compute-rw" \
-    --metadata-from-file "startup-script=${KUBE_TEMP}/master-start.sh" \
-    --disk name="${MASTER_NAME}-pd" device-name=master-pd mode=rw boot=no auto-delete=no &
+    --metadata-from-file "kubernetes-master-params=${KUBERNETES_MASTER_PARAMS_TMP}" \
+                         "user-data=${KUBE_ROOT}/cluster/gce-coreos/master.yaml" &
 
   # Create a single firewall rule for all minions.
   create-firewall-rule "${MINION_TAG}-all" "${CLUSTER_IP_RANGE}" "${MINION_TAG}" &
 
   # Wait for last batch of jobs.
   wait-for-jobs
+
+  detect-master-internal-ip
 
   # Create the routes, 10 at a time.
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
@@ -460,20 +542,24 @@ function kube-up {
   fi
   # Create the instances, 5 at a time.
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
-    (
-      echo "#! /bin/bash"
-      echo "ZONE='${ZONE}'"
-      echo "MASTER_NAME='${MASTER_NAME}'"
-      echo "MINION_IP_RANGE='${MINION_IP_RANGES[$i]}'"
-      echo "EXTRA_DOCKER_OPTS='${EXTRA_DOCKER_OPTS}'"
-      echo "ENABLE_DOCKER_REGISTRY_CACHE='${ENABLE_DOCKER_REGISTRY_CACHE:-false}'"
-      grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
-      grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/salt-minion.sh"
-    ) > "${KUBE_TEMP}/minion-start-${i}.sh"
+    ensure-minion-i-metadata $i
+  #  (
+  #    echo "#! /bin/bash"
+  #    echo "ZONE='${ZONE}'"
+  #    echo "MASTER_NAME='${MASTER_NAME}'"
+  #    echo "MINION_IP_RANGE='${MINION_IP_RANGES[$i]}'"
+  #    echo "EXTRA_DOCKER_OPTS='${EXTRA_DOCKER_OPTS}'"
+  #    echo "ENABLE_DOCKER_REGISTRY_CACHE='${ENABLE_DOCKER_REGISTRY_CACHE:-false}'"
+  #    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
+  #    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/salt-minion.sh"
+  #  ) > "${KUBE_TEMP}/minion-start-${i}.sh"
 
     local scopes_flag="${scope_flags[@]}"
-    create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" "startup-script=${KUBE_TEMP}/minion-start-${i}.sh" &
-
+    # create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" "startup-script=${KUBE_TEMP}/minion-start-${i}.sh" &
+    create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" \
+                  "kubernetes-minion-params=${KUBERNETES_MINION_PARAMS_TMP}" \
+                  "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml" &
+ 
     if [ $i -ne 0 ] && [ $((i%5)) -eq 0 ]; then
       echo Waiting for creation of a batch of instances at $i...
       wait-for-jobs
@@ -492,100 +578,94 @@ function kube-up {
   echo "  up."
   echo
 
-  until curl --insecure --user "${KUBE_USER}:${KUBE_PASSWORD}" --max-time 5 \
-          --fail --output /dev/null --silent "https://${KUBE_MASTER_IP}/api/v1beta1/pods"; do
+  until curl --max-time 5 \
+          --fail --output /dev/null --silent "${KUBERNETES_MASTER_HOSTPORT}/api/v1beta1/pods"; do
       printf "."
       sleep 2
   done
 
   echo "Kubernetes cluster created."
 
-  local kube_cert="kubecfg.crt"
-  local kube_key="kubecfg.key"
-  local ca_cert="kubernetes.ca.crt"
-  # TODO use token instead of kube_auth
-  local kube_auth="kubernetes_auth"
+  echo "!!! Skipping cert setup for k8s master !!!"
 
-  local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
-  local context="${INSTANCE_PREFIX}"
-  local user="${INSTANCE_PREFIX}-admin"
-  local config_dir="${HOME}/.kube/${context}"
+  # local kube_cert="kubecfg.crt"
+  # local kube_key="kubecfg.key"
+  # local ca_cert="kubernetes.ca.crt"
+  # TODO use token instead of kube_auth
+  # local kube_auth="kubernetes_auth"
+
+  # local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
+  # local context="${INSTANCE_PREFIX}"
+  # local user="${INSTANCE_PREFIX}-admin"
+  # local config_dir="${HOME}/.kube/${context}"
 
   # TODO: generate ADMIN (and KUBELET) tokens and put those in the master's
   # config file.  Distribute the same way the htpasswd is done.
-  (
-   mkdir -p "${config_dir}"
-   umask 077
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.crt" >"${config_dir}/${kube_cert}" 2>/dev/null
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.key" >"${config_dir}/${kube_key}" 2>/dev/null
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/ca.crt" >"${config_dir}/${ca_cert}" 2>/dev/null
+  # (
+  #  mkdir -p "${config_dir}"
+  #  umask 077
+  #  gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.crt" >"${config_dir}/${kube_cert}" 2>/dev/null
+   # gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.key" >"${config_dir}/${kube_key}" 2>/dev/null
+   # gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/ca.crt" >"${config_dir}/${ca_cert}" 2>/dev/null
 
-   "${kubectl}" config set-cluster "${context}" --server="https://${KUBE_MASTER_IP}" --certificate-authority="${config_dir}/${ca_cert}" --global
-   "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
-   "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
-   "${kubectl}" config use-context "${context}" --global
+   # "${kubectl}" config set-cluster "${context}" --server="https://${KUBE_MASTER_IP}" --certificate-authority="${config_dir}/${ca_cert}" --global
+   # "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
+   # "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
+   # "${kubectl}" config use-context "${context}" --global
 
-   cat << EOF > "${config_dir}/${kube_auth}"
-{
-  "User": "$KUBE_USER",
-  "Password": "$KUBE_PASSWORD",
-  "CAFile": "${config_dir}/${ca_cert}",
-  "CertFile": "${config_dir}/${kube_cert}",
-  "KeyFile": "${config_dir}/${kube_key}"
-}
-EOF
+   # cat << EOF > "${config_dir}/${kube_auth}"
+# {
+#   "User": "$KUBE_USER",
+#   "Password": "$KUBE_PASSWORD",
+#   "CAFile": "${config_dir}/${ca_cert}",
+#   "CertFile": "${config_dir}/${kube_cert}",
+#   "KeyFile": "${config_dir}/${kube_key}"
+# }
+# EOF
 
-   chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
-     "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
-   echo "Wrote ${config_dir}/${kube_auth}"
-  )
+   # chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
+   #   "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
+   # echo "Wrote ${config_dir}/${kube_auth}"
+  # )
 
   echo "Sanity checking cluster..."
+  sleep 30  # XXX If we try ssh without sleep, it asks for password.  Why?
 
   # Basic sanity checking
   local i
   local rc # Capture return code without exiting because of errexit bash option
+  set -e
+  set -x
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
       # Make sure docker is installed and working.
       local attempt=0
       while true; do
         echo -n Attempt "$(($attempt+1))" to check Docker on node "${MINION_NAMES[$i]}" ...
-        local output=$(gcloud compute --project "${PROJECT}" ssh --zone "$ZONE" "${MINION_NAMES[$i]}" --command "sudo docker ps -a" 2>/dev/null)
+        local output=$(gcloud compute --project "${PROJECT}" ssh --zone "$ZONE" "${MINION_NAMES[$i]}" --command "which docker" 2>/dev/null)
         if [[ -z "${output}" ]]; then
-          if (( attempt > 9 )); then
+          if (( attempt > 2 )); then
             echo
             echo -e "${color_red}Docker failed to install on node ${MINION_NAMES[$i]}. Your cluster is unlikely" >&2
             echo "to work correctly. Please run ./cluster/kube-down.sh and re-create the" >&2
             echo -e "cluster. (sorry!)${color_norm}" >&2
             exit 1
           fi
-        elif [[ "${output}" != *"kubernetes/pause"* ]]; then
-          if (( attempt > 9 )); then
-            echo
-            echo -e "${color_red}Failed to observe kubernetes/pause on node ${MINION_NAMES[$i]}. Your cluster is unlikely" >&2
-            echo "to work correctly. Please run ./cluster/kube-down.sh and re-create the" >&2
-            echo -e "cluster. (sorry!)${color_norm}" >&2
-            exit 1
-          fi
-        else
-          echo -e " ${color_green}[working]${color_norm}"
-          break
+          attempt=$(($attempt+1))
+          sleep 10
         fi
-        echo -e " ${color_yellow}[not working yet]${color_norm}"
-        # Start Docker, in case it failed to start.
-        gcloud compute --project "${PROJECT}" ssh --zone "$ZONE" "${MINION_NAMES[$i]}" \
-                       --command "sudo service docker start" 2>/dev/null || true
-        attempt=$(($attempt+1))
-        sleep 30
+        break
       done
   done
+  set +x
+  set +e
 
   echo
   echo -e "${color_green}Kubernetes cluster is running.  The master is running at:"
   echo
-  echo -e "${color_yellow}  https://${KUBE_MASTER_IP}"
+  echo -e "${color_yellow}  ${KUBERNETES_MASTER_HOSTPORT}"
   echo
-  echo -e "${color_green}The user name and password to use is located in ${config_dir}/${kube_auth}.${color_norm}"
+  # echo -e "${color_green}The user name and password to use is located in ${config_dir}/${kube_auth}.${color_norm}"
+  echo "${color_red}!!! There is no authentication aside from your IP.  You have no security. !!!${color_norm}"
   echo
 
 }
@@ -658,34 +738,37 @@ function kube-down {
 
 # Update a kubernetes cluster with latest source
 function kube-push {
+  echo "TODO: Support kube-push for k8s clusters based on CoreOS."
+
   detect-project
   detect-master
 
   # Make sure we have the tar files staged on Google Storage
-  find-release-tars
-  upload-server-tars
+  # find-release-tars
+  # upload-server-tars
 
-  (
-    echo "#! /bin/bash"
-    echo "mkdir -p /var/cache/kubernetes-install"
-    echo "cd /var/cache/kubernetes-install"
-    echo "readonly SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
-    echo "readonly SALT_TAR_URL='${SALT_TAR_URL}'"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
-    grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/download-release.sh"
-    echo "echo Executing configuration"
-    echo "sudo salt '*' mine.update"
-    echo "sudo salt --force-color '*' state.highstate"
-  ) | gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "$KUBE_MASTER" --command "sudo bash"
+  # (
+  #   echo "#! /bin/bash"
+  #   echo "mkdir -p /var/cache/kubernetes-install"
+  #   echo "cd /var/cache/kubernetes-install"
+  #   echo "readonly SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
+  #   echo "readonly SALT_TAR_URL='${SALT_TAR_URL}'"
+  #   grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/common.sh"
+  #   grep -v "^#" "${KUBE_ROOT}/cluster/gce/templates/download-release.sh"
+  #   echo "echo Executing configuration"
+  #   echo "sudo salt '*' mine.update"
+  #   echo "sudo salt --force-color '*' state.highstate"
+  # ) | gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "$KUBE_MASTER" --command "sudo bash"
 
-  get-password
+  # get-password
 
   echo
   echo "Kubernetes cluster is running.  The master is running at:"
   echo
-  echo "  https://${KUBE_MASTER_IP}"
+  echo "  ${KUBERNETES_MASTER_HOSTPORT}"
   echo
-  echo "The user name and password to use is located in ~/.kubernetes_auth."
+  # echo "The user name and password to use is located in ~/.kubernetes_auth."
+  echo "There is no authentication aside from your IP.  You have no security."
   echo
 
 }
