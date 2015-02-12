@@ -105,3 +105,21 @@ coreos:
         ExecStartPre=/usr/bin/chmod 0755 /opt/kubernetes/container_bridge.sh
         ExecStart=/opt/kubernetes/container_bridge.sh
 
+    - name: docker.service
+      command: start
+      content: |
+        [Unit]
+        Description=Docker Application Container Engine
+        Documentation=http://docs.docker.com
+        After=docker.socket network-online.target
+        Requires=docker.socket network-online.target
+
+        [Service]
+        LimitNOFILE=1048576
+        LimitNPROC=1048576
+        Environment=TMPDIR=/var/tmp
+        Environment=DOCKER_OPTS='--bridge="cbr0" --iptables=false --ip-masq=false -r=false'
+        EnvironmentFile=/etc/kubernetes-minion-params
+        ExecStart=/usr/bin/docker -d --host=fd:// $DOCKER_OPTS $EXTRA_DOCKER_OPTS
+        Restart=always
+        RestartSec=10
