@@ -84,3 +84,24 @@ coreos:
         --etcd_servers=http://${KUBE_MASTER_INTERNAL_IP}:4001 \
         --master=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
         --logtostderr=true
+
+    - name: container-bridge.service
+      command: start
+      content: |
+        [Unit]
+        Description=Fetches and runs container_bridge.sh script
+        Requires=network-online.target
+        After=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/kubernetes-minion-params
+        ExecStartPre=/usr/bin/mkdir -p /opt/kubernetes
+        ExecStartPre=/bin/curl --fail --silent --show-error \
+        -H "X-Google-Metadata-Request: True" \
+        -o /opt/kubernetes/container_bridge.sh \
+        http://169.254.169.254/computeMetadata/v1/instance/attributes/container-bridge-sh
+        ExecStartPre=/usr/bin/chmod 0755 /opt/kubernetes/container_bridge.sh
+        ExecStart=/opt/kubernetes/container_bridge.sh
+

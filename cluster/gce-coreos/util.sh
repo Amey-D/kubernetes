@@ -311,6 +311,7 @@ function create-route {
 # $2: The scopes flag.
 # $3: The minion params file
 # $4: The minion yaml file (cloud-init compatible).
+# $5: The local path of container_bridge.sh file
 function create-minion {
   detect-project
   local attempt=0
@@ -327,7 +328,7 @@ function create-minion {
       --network "${NETWORK}" \
       $2 \
       --can-ip-forward \
-      --metadata-from-file "$3" "$4"; then
+      --metadata-from-file "$3" "$4" $5; then
         if (( attempt > 5 )); then
           echo -e "${color_red}Failed to create instance $1 ${color_norm}"
           exit 2
@@ -558,8 +559,9 @@ function kube-up {
     # create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" "startup-script=${KUBE_TEMP}/minion-start-${i}.sh" &
     create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" \
                   "kubernetes-minion-params=${KUBERNETES_MINION_PARAMS_TMP}" \
-                  "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml" &
- 
+                  "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml" \
+                  "container-bridge-sh=${KUBE_ROOT}/cluster/gce-coreos/container_bridge.sh" &
+
     if [ $i -ne 0 ] && [ $((i%5)) -eq 0 ]; then
       echo Waiting for creation of a batch of instances at $i...
       wait-for-jobs
@@ -634,8 +636,6 @@ function kube-up {
   # Basic sanity checking
   local i
   local rc # Capture return code without exiting because of errexit bash option
-  set -e
-  set -x
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
       # Make sure docker is installed and working.
       local attempt=0
@@ -656,18 +656,15 @@ function kube-up {
         break
       done
   done
-  set +x
-  set +e
 
   echo
-  echo -e "${color_green}Kubernetes cluster is running.  The master is running at:"
+  echo -e "${color_green}Kubernetes cluster is running.  The master is running at:${color_norm}"
   echo
-  echo -e "${color_yellow}  ${KUBERNETES_MASTER_HOSTPORT}"
+  echo -e "${color_yellow}  ${KUBERNETES_MASTER_HOSTPORT} ${color_norm}"
   echo
   # echo -e "${color_green}The user name and password to use is located in ${config_dir}/${kube_auth}.${color_norm}"
-  echo "${color_red}!!! There is no authentication aside from your IP.  You have no security. !!!${color_norm}"
+  echo "${color_red} !!! There is no authentication aside from your IP.  You have no security. !!! ${color_norm}"
   echo
-
 }
 
 # Delete a kubernetes cluster. This is called from test-teardown.
