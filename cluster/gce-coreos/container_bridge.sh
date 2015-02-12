@@ -29,7 +29,7 @@ function configure_bridge() {
 }
 
 function configure_iptables() {
-	iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE ! -d 10.0.0.0/8
+	iptables -w -t nat -A POSTROUTING -o eth0 -j MASQUERADE ! -d 10.0.0.0/8
 }
 
 echo "+++ Ensure the bridge exists ..."
