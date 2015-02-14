@@ -1,18 +1,47 @@
 #cloud-config
 
 coreos:
-  etcd:
-    addr: $public_ipv4:4001
-    peer-addr: $public_ipv4:7001
-
-  fleet:
-    metadata: region=us-west,role=master
-
   units:
-    - name: etcd.service
+    - name: kubernetes-minion-params.service
       command: start
+      content: |
+        [Unit]
+        Description=Fetch kubernetes-minion-params
+        Requires=network-online.target
+        After=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/curl --fail --silent --show-error \
+        -H "X-Google-Metadata-Request: True" \
+        -o /etc/kubernetes-minion-params \
+        http://169.254.169.254/computeMetadata/v1/instance/attributes/kubernetes-minion-params
+
+    - name: etcd.service
+      mask: true
+
+    - name: fleet.socket
+      command: start
+      content: |
+        [Socket]
+        ListenStream=/var/run/fleet.sock
+
     - name: fleet.service
       command: start
+      content: |
+        [Unit]
+        Description=fleet daemon
+        Wants=kubernetes-minion-params.service
+        After=kubernetes-minion-params.service
+        Wants=fleet.socket
+        After=fleet.socket
+        [Service]
+        EnvironmentFile=/etc/kubernetes-minion-params
+        Environment="FLEET_METADATA=role=node"
+        ExecStart=/usr/bin/fleetd
+        Restart=always
+        RestartSec=10s
 
     - name: kubernetes-install-minion.service
       command: start
@@ -31,22 +60,6 @@ coreos:
         ExecStartPre=/usr/bin/mkdir -p /opt/kubernetes/pkg
         ExecStartPre=/usr/bin/curl --location --create-dirs --output /opt/kubernetes/pkg/kubernetes-server-linux-amd64.tar.gz ${SERVER_BINARY_TAR_URL}
         ExecStart=/usr/bin/tar xf /opt/kubernetes/pkg/kubernetes-server-linux-amd64.tar.gz -C /opt --overwrite
-
-    - name: kubernetes-minion-params.service
-      command: start
-      content: |
-        [Unit]
-        Description=Fetch kubernetes-minion-params
-        Requires=network-online.target
-        After=network-online.target
-
-        [Service]
-        Type=oneshot
-        RemainAfterExit=yes
-        ExecStart=/bin/curl --fail --silent --show-error \
-        -H "X-Google-Metadata-Request: True" \
-        -o /etc/kubernetes-minion-params \
-        http://169.254.169.254/computeMetadata/v1/instance/attributes/kubernetes-minion-params
 
     - name: kubelet.service
       command: start

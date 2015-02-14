@@ -1,20 +1,7 @@
 #cloud-config
 
 coreos:
-  etcd:
-    addr: $private_ipv4:4001
-    peer-addr: $private_ipv4:7001
-
-  fleet:
-    metadata: region=us-west,role=master
-
   units:
-    - name: etcd.service
-      command: start
-    - name: fleet.service
-      command: start
-
-# TODO: Organize these into targets.
     - name: kubernetes-master-params.service
       command: start
       content: |
@@ -31,6 +18,51 @@ coreos:
         -o /etc/kubernetes-master-params \
         http://169.254.169.254/computeMetadata/v1/instance/attributes/kubernetes-master-params
 
+    - name: etcd.service
+      command: start
+      content: |
+        [Unit]
+        Description=etcd
+        Requires=kubernetes-master-params.service
+        After=kubernetes-master-params.service
+        [Service]
+        EnvironmentFile=/etc/kubernetes-master-params
+        User=etcd
+        PermissionsStartOnly=true
+        ExecStart=/usr/bin/etcd \
+        --name ${MASTER_NAME} \
+        --addr $private_ipv4:4001 \
+        --bind-addr 0.0.0.0 \
+        --data-dir /var/lib/etcd \
+        --http-read-timeout 86400 \
+        --peer-addr $private_ipv4:7001 \
+        --snapshot true
+        Restart=always
+        RestartSec=10s
+
+    - name: fleet.socket
+      command: start
+      content: |
+        [Socket]
+        ListenStream=/var/run/fleet.sock
+
+    - name: fleet.service
+      command: start
+      content: |
+        [Unit]
+        Description=fleet daemon
+        Wants=etcd.service
+        After=etcd.service
+        Wants=fleet.socket
+        After=fleet.socket
+        [Service]
+        Environment="FLEET_ETCD_SERVERS=http://127.0.0.1:4001"
+        Environment="FLEET_METADATA=role=master"
+        ExecStart=/usr/bin/fleetd
+        Restart=always
+        RestartSec=10s
+
+# TODO: Organize these into targets.
     - name: kubernetes-install-master.service
       command: start
       content: |
