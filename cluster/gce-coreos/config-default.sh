@@ -35,6 +35,11 @@ MASTER_TAG="${INSTANCE_PREFIX}-master"
 MINION_TAG="${INSTANCE_PREFIX}-minion"
 MINION_NAMES=($(eval echo ${INSTANCE_PREFIX}-minion-{1..${NUM_MINIONS}}))
 
+# Choose between "etcd"-based cluster of "fleet"-based cluster
+# XXX Remote this option once we decide which clustering method to use.
+COREOS_CLUSTER="${COREOS_CLUSTER:-etcd}"
+KUBE_DISCOVERY_URL=""
+
 # Compute IP addresses for nodes.
 function increment_ipv4 {
   local ip_base=$1

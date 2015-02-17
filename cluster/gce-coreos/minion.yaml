@@ -19,7 +19,26 @@ coreos:
         http://169.254.169.254/computeMetadata/v1/instance/attributes/kubernetes-minion-params
 
     - name: etcd.service
-      mask: true
+      command: start
+      content: |
+        [Unit]
+        Description=etcd
+        Requires=kubernetes-minion-params.service
+        After=kubernetes-minion-params.service
+        [Service]
+        EnvironmentFile=/etc/kubernetes-minion-params
+        User=etcd
+        PermissionsStartOnly=true
+        ExecStart=/usr/bin/etcd \
+        --name ${KUBE_MINION_HOSTNAME} \
+        --addr $private_ipv4:4001 \
+        --bind-addr 0.0.0.0 \
+        --data-dir /var/lib/etcd \
+        --http-read-timeout 86400 \
+        --peer-addr $private_ipv4:7001 \
+        --snapshot true
+        Restart=always
+        RestartSec=10s
 
     - name: fleet.socket
       command: start
@@ -38,7 +57,6 @@ coreos:
         After=fleet.socket
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
-        Environment="FLEET_METADATA=role=node"
         ExecStart=/usr/bin/fleetd
         Restart=always
         RestartSec=10s
@@ -74,7 +92,7 @@ coreos:
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kubelet \
-        --etcd_servers=http://${KUBE_MASTER_INTERNAL_IP}:4001 \
+        --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --api_servers=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
         --address=0.0.0.0 \
         --config=/etc/kubernetes/manifests \
@@ -94,7 +112,7 @@ coreos:
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kube-proxy \
-        --etcd_servers=http://${KUBE_MASTER_INTERNAL_IP}:4001 \
+        --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --master=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
         --logtostderr=true
 

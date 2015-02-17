@@ -356,6 +356,17 @@ function detect-master-internal-ip {
     | awk '{ print $2 }')
 }
 
+# Provides:
+#  KUBE_DISCOVERY_URL
+# XXX OK to use the public discovery service by CoreOS?
+function ensure-discovery-url {
+  if [ "etcd" == ${COREOS_CLUSTER} ] && [ -z ${KUBE_DISCOVERY_URL} ]; then
+    KUBE_DISCOVERY_URL=$(curl -w "\n" https://discovery.etcd.io/new)
+  fi
+  echo "+++ Discovery URL: ${KUBE_DISCOVERY_URL}"
+}
+
+
 # Arguments:
 #   i (Specifying the i'th minion)
 # Prereqs:
@@ -372,12 +383,22 @@ function ensure-minion-i-metadata {
     echo "#! /bin/bash"
     echo "ZONE='${ZONE}'"
     echo "MASTER_NAME='${MASTER_NAME}'"
+    echo "KUBE_MINION_HOSTNAME='${INSTANCE_PREFIX}-minion-$i'"
     echo "MINION_IP_RANGE='${MINION_IP_RANGES[$i]}'"
     echo "EXTRA_DOCKER_OPTS='${EXTRA_DOCKER_OPTS}'"
     echo "ENABLE_DOCKER_REGISTRY_CACHE='${ENABLE_DOCKER_REGISTRY_CACHE:-false}'"
     echo "SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
     echo "KUBE_MASTER_INTERNAL_IP=${KUBE_MASTER_INTERNAL_IP}"
-    echo "FLEET_ETCD_SERVERS=http://${KUBE_MASTER_INTERNAL_IP}:4001"
+    echo "FLEET_METADATA='role=node'"
+
+    if [ "etcd" == ${COREOS_CLUSTER} ]; then
+      echo "FLEET_ETCD_SERVERS=http://127.0.0.1:4001"
+      echo "KUBELET_ETCD_SERVERS=http://127.0.0.1:4001"
+      echo "ETCD_DISCOVERY=${KUBE_DISCOVERY_URL}"
+    elif [ "fleet" == ${COREOS_CLUSTER} ]; then
+      echo "FLEET_ETCD_SERVERS=http://${KUBE_MASTER_INTERNAL_IP}:4001"
+      echo "KUBELET_ETCD_SERVERS=http://${KUBE_MASTER_INTERNAL_IP}:4001"
+    fi
   ) > "${KUBERNETES_MINION_PARAMS_TMP[$i]}"
 }
 
@@ -396,6 +417,11 @@ function ensure-master-metadata {
     echo "ENABLE_NODE_MONITORING='${ENABLE_NODE_MONITORING:-false}'"
     echo "ENABLE_NODE_LOGGING='${ENABLE_NODE_LOGGING:-false}'"
     echo "LOGGING_DESTINATION='${LOGGING_DESTINATION:-}'"
+    echo "FLEET_METADATA='role=master'"
+    echo "FLEET_ETCD_SERVERS=http://127.0.0.1:4001"
+    if [ "etcd" == ${COREOS_CLUSTER} ]; then
+      echo "ETCD_DISCOVERY=${KUBE_DISCOVERY_URL}"
+    fi
   ) > "$KUBERNETES_MASTER_PARAMS_TMP"
 }
 
@@ -502,6 +528,7 @@ function kube-up {
     --zone "${ZONE}" \
     --size "10GB" || true
 
+  ensure-discovery-url
   ensure-master-metadata
   gcloud compute instances create "${MASTER_NAME}" \
     --project "${PROJECT}" \

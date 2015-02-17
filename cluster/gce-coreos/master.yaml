@@ -56,8 +56,7 @@ coreos:
         Wants=fleet.socket
         After=fleet.socket
         [Service]
-        Environment="FLEET_ETCD_SERVERS=http://127.0.0.1:4001"
-        Environment="FLEET_METADATA=role=master"
+        EnvironmentFile=/etc/kubernetes-master-params
         ExecStart=/usr/bin/fleetd
         Restart=always
         RestartSec=10s
