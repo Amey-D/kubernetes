@@ -206,20 +206,16 @@ function detect-master () {
 #   KUBE_USER
 #   KUBE_PASSWORD
 function get-password {
-  # XXX We do not use username password for the prototype using CoreOS
   # go template to extract the auth-path of the current-context user
-  # local template='{{$ctx := index . "current-context"}}{{$user := index . "contexts" $ctx "user"}}{{index . "users" $user "auth-path"}}'
-  # local file=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${template}")
-  # if [[ -r "$file" ]]; then
-  #  KUBE_USER=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["User"]')
-  #  KUBE_PASSWORD=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["Password"]')
-  #  return
-  # fi
-  # KUBE_USER=admin
-  # KUBE_PASSWORD=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(16))')
-
-  KUBE_USER=""
-  KUBE_PASSWORD=""
+  local template='{{$ctx := index . "current-context"}}{{$user := index . "contexts" $ctx "user"}}{{index . "users" $user "auth-path"}}'
+  local file=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${template}")
+  if [[ -r "$file" ]]; then
+    KUBE_USER=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["User"]')
+    KUBE_PASSWORD=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["Password"]')
+    return
+  fi
+  KUBE_USER=admin
+  KUBE_PASSWORD=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(16))')
 }
 
 # Generate authentication token for admin user. Will
@@ -309,9 +305,7 @@ function create-route {
 # Robustly try to create an instance.
 # $1: The name of the instance.
 # $2: The scopes flag.
-# $3: The minion params file
-# $4: The minion yaml file (cloud-init compatible).
-# $5: The local path of container_bridge.sh file
+# $3: The local path of container_bridge.sh file
 function create-minion {
   detect-project
   local attempt=0
@@ -328,7 +322,7 @@ function create-minion {
       --network "${NETWORK}" \
       $2 \
       --can-ip-forward \
-      --metadata-from-file "$3" "$4" $5; then
+      --metadata-from-file "$3"; then
         if (( attempt > 5 )); then
           echo -e "${color_red}Failed to create instance $1 ${color_norm}"
           exit 2
@@ -366,6 +360,59 @@ function ensure-discovery-url {
   echo "+++ Discovery URL: ${KUBE_DISCOVERY_URL}"
 }
 
+# This function checks presence of local CA cert and keys.
+# If either of them is not present, it will initialize a local CA.
+# XXX This approach needs to be run by someone more familiar with
+# cert management.
+# XXX etcd-ca tool is used for its simplicity.  This should probably be replaced
+# by more commonly used tools such as openssl or easyrsa,
+function ensure-etcd-ca-certs {
+  set -x
+  certs_dir=$1
+  password=$2
+
+  echo "+++ Checking CA certs ..."
+  if [[ ! -r ${certs_dir}/ca.crt ]] || [[ ! -r ${certs_dir}/ca.key ]]; then
+    echo "++++ Generate CA certs ..."
+    etcd-ca --depot-path ${certs_dir} init --passphrase ${password}
+  fi
+  echo "+++ Done checking CA certs."
+  set +x
+}
+
+# Generate a CSR, signed certs and keys for the given host based on the
+# given IP address.
+function ensure-etcd-host-certs {
+  set -x
+  ipaddr=${1}
+  hostname=${2}
+  password=$3
+  certs_dir="$4"
+  echo "+++ Generate certs for host: ${hostname}, IP: ${ipaddr}"
+  rm -f "${certs_dir}/${hostname}.host.csr"  # delete old CSR for this host if it exists.
+  etcd-ca --depot-path ${certs_dir} new-cert --passphrase ${password} --ip "${ipaddr}" ${hostname}
+  etcd-ca --depot-path ${certs_dir} sign --passphrase ${password} ${hostname}
+  etcd-ca --depot-path ${certs_dir} export --insecure --passphrase ${password} ${hostname} > ${certs_dir}/${hostname}.tar
+  echo "+++ Done generating certs for host: ${hostname}."
+  set +x
+}
+
+function copy-etcd-certs {
+  set -x
+  hostname=${1}
+  remote_certs_dir=${2}
+  local_certs_dir=${3}
+  # XXX In the next few lines, there exists a time window during which the certs dir is world-readable.
+  # This needs to be fixed.
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo mkdir -p ${remote_certs_dir}"
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo chmod 0777 ${remote_certs_dir}"
+  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" "${local_certs_dir}/ca.crt" ${hostname}:${remote_certs_dir}
+  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" "${local_certs_dir}/${hostname}.tar" ${hostname}:${remote_certs_dir}
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" \
+      --command "sudo tar xf ${remote_certs_dir}/${hostname}.tar -C ${remote_certs_dir}"
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo chmod 0755 ${remote_certs_dir}"
+  set +x
+}
 
 # Arguments:
 #   i (Specifying the i'th minion)
@@ -378,12 +425,13 @@ function ensure-discovery-url {
 function ensure-minion-i-metadata {
   ensure-temp-dir
   i="$1"
+  local minion_name="$2"
   KUBERNETES_MINION_PARAMS_TMP[$i]="${KUBE_TEMP}/kubernetes-minion-params-${i}"
   (
     echo "#! /bin/bash"
     echo "ZONE='${ZONE}'"
     echo "MASTER_NAME='${MASTER_NAME}'"
-    echo "KUBE_MINION_HOSTNAME='${INSTANCE_PREFIX}-minion-$i'"
+    echo "KUBE_MINION_HOSTNAME=${minion_name}"
     echo "MINION_IP_RANGE='${MINION_IP_RANGES[$i]}'"
     echo "EXTRA_DOCKER_OPTS='${EXTRA_DOCKER_OPTS}'"
     echo "ENABLE_DOCKER_REGISTRY_CACHE='${ENABLE_DOCKER_REGISTRY_CACHE:-false}'"
@@ -424,6 +472,7 @@ function ensure-master-metadata {
     fi
   ) > "$KUBERNETES_MASTER_PARAMS_TMP"
 }
+
 
 # Instantiate a kubernetes cluster
 #
@@ -528,8 +577,6 @@ function kube-up {
     --zone "${ZONE}" \
     --size "10GB" || true
 
-  ensure-discovery-url
-  ensure-master-metadata
   gcloud compute instances create "${MASTER_NAME}" \
     --project "${PROJECT}" \
     --zone "${ZONE}" \
@@ -538,17 +585,36 @@ function kube-up {
     --image "${IMAGE}" \
     --tags "${MASTER_TAG}" \
     --network "${NETWORK}" \
-    --scopes "storage-ro" "compute-rw" \
-    --metadata-from-file "kubernetes-master-params=${KUBERNETES_MASTER_PARAMS_TMP}" \
-                         "user-data=${KUBE_ROOT}/cluster/gce-coreos/master.yaml" &
+    --scopes "storage-ro" "compute-rw" &
 
   # Create a single firewall rule for all minions.
   create-firewall-rule "${MINION_TAG}-all" "${CLUSTER_IP_RANGE}" "${MINION_TAG}" &
 
   # Wait for last batch of jobs.
   wait-for-jobs
-
+  sleep 30  # let the master become available
   detect-master-internal-ip
+  local context="${INSTANCE_PREFIX}"
+  local config_dir="${HOME}"/.kube/"${context}"
+
+  set -x
+  local local_certs_dir="${config_dir}/.etcd"
+  local remote_certs_dir="/opt/kubernetes/.etcd"
+  ensure-etcd-ca-certs ${local_certs_dir} ${KUBE_PASSWORD}
+  ensure-etcd-host-certs ${KUBE_MASTER_INTERNAL_IP} ${MASTER_NAME} "${KUBE_PASSWORD}" ${local_certs_dir}
+  copy-etcd-certs ${MASTER_NAME} ${remote_certs_dir} ${local_certs_dir}
+
+  ensure-discovery-url
+  ensure-master-metadata
+
+  gcloud compute instances add-metadata "${MASTER_NAME}" \
+    --project "${PROJECT}" --zone "${ZONE}" \
+    --metadata-from-file "kubernetes-master-params=${KUBERNETES_MASTER_PARAMS_TMP}" \
+                         "user-data=${KUBE_ROOT}/cluster/gce-coreos/master.yaml"
+
+  gcloud compute ssh --project "${PROJECT}" --zone "${ZONE}" "${MASTER_NAME}" \
+         --command "sudo reboot" >/dev/null 2>&1 || :
+  set +x
 
   # Create the routes, 10 at a time.
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
@@ -571,7 +637,7 @@ function kube-up {
   fi
   # Create the instances, 5 at a time.
   for (( i=0; i<${#MINION_NAMES[@]}; i++)); do
-    ensure-minion-i-metadata $i
+    local minion_name="${MINION_NAMES[$i]}"
   #  (
   #    echo "#! /bin/bash"
   #    echo "ZONE='${ZONE}'"
@@ -585,15 +651,33 @@ function kube-up {
 
     local scopes_flag="${scope_flags[@]}"
     # create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" "startup-script=${KUBE_TEMP}/minion-start-${i}.sh" &
-    create-minion "${MINION_NAMES[$i]}" "${scopes_flag}" \
-                  "kubernetes-minion-params=${KUBERNETES_MINION_PARAMS_TMP}" \
-                  "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml" \
-                  "container-bridge-sh=${KUBE_ROOT}/cluster/gce-coreos/container_bridge.sh" &
+    create-minion ${minion_name} "${scopes_flag}" \
+                  "container-bridge-sh=${KUBE_ROOT}/cluster/gce-coreos/container_bridge.sh"
+                  # "kubernetes-minion-params=${KUBERNETES_MINION_PARAMS_TMP}" \
+                  # "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml" \
 
-    if [ $i -ne 0 ] && [ $((i%5)) -eq 0 ]; then
-      echo Waiting for creation of a batch of instances at $i...
-      wait-for-jobs
-    fi
+    set -x
+    sleep 30  # wait for the minion to be available
+    local minion_internal_ip=$(gcloud compute instances describe \
+      --project "${PROJECT}" --zone "${ZONE}" "${minion_name}" \
+      --fields networkInterfaces[0].networkIP --format=text \
+      | awk '{ print $2 }')
+    ensure-etcd-host-certs ${minion_internal_ip} ${minion_name} "${KUBE_PASSWORD}" ${local_certs_dir}
+    copy-etcd-certs ${minion_name} ${remote_certs_dir} ${local_certs_dir}
+
+    ensure-minion-i-metadata $i ${minion_name}
+    gcloud compute instances add-metadata "${minion_name}" \
+      --project "${PROJECT}" --zone "${ZONE}" \
+      --metadata-from-file "kubernetes-minion-params=${KUBERNETES_MINION_PARAMS_TMP}" \
+                           "user-data=${KUBE_ROOT}/cluster/gce-coreos/minion.yaml"
+    gcloud compute ssh --project "${PROJECT}" --zone "${ZONE}" "${minion_name}" \
+           --command "sudo reboot" >/dev/null 2>&1 || :
+
+    set +x
+    # if [ $i -ne 0 ] && [ $((i%5)) -eq 0 ]; then
+    #  echo Waiting for creation of a batch of instances at $i...
+    #  wait-for-jobs
+    # fi
 
   done
   # Wait for last batch of jobs.
@@ -625,9 +709,7 @@ function kube-up {
   # local kube_auth="kubernetes_auth"
 
   # local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
-  # local context="${INSTANCE_PREFIX}"
   # local user="${INSTANCE_PREFIX}-admin"
-  # local config_dir="${HOME}/.kube/${context}"
 
   # TODO: generate ADMIN (and KUBELET) tokens and put those in the master's
   # config file.  Distribute the same way the htpasswd is done.

@@ -31,12 +31,15 @@ coreos:
         PermissionsStartOnly=true
         ExecStart=/usr/bin/etcd \
         --name ${KUBE_MINION_HOSTNAME} \
-        --addr $private_ipv4:4001 \
-        --bind-addr 0.0.0.0 \
+        --discovery ${ETCD_DISCOVERY} \
+        --addr 127.0.0.1:4001 \
+        --bind-addr 127.0.0.1:4001 \
         --data-dir /var/lib/etcd \
-        --http-read-timeout 86400 \
-        --peer-addr $private_ipv4:7001 \
-        --snapshot true
+        --peer-addr $private_ipv4:2380 \
+        --peer-bind-addr $private_ipv4:2380 \
+        --peer-ca-file=/opt/kubernetes/.etcd/ca.crt \
+        --peer-cert-file=/opt/kubernetes/.etcd/${KUBE_MINION_HOSTNAME}.crt \
+        --peer-key-file=/opt/kubernetes/.etcd/${KUBE_MINION_HOSTNAME}.key.insecure
         Restart=always
         RestartSec=10s
 

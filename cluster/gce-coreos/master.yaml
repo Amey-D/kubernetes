@@ -25,18 +25,22 @@ coreos:
         Description=etcd
         Requires=kubernetes-master-params.service
         After=kubernetes-master-params.service
+
         [Service]
         EnvironmentFile=/etc/kubernetes-master-params
         User=etcd
         PermissionsStartOnly=true
         ExecStart=/usr/bin/etcd \
         --name ${MASTER_NAME} \
-        --addr $private_ipv4:4001 \
-        --bind-addr 0.0.0.0 \
+        --discovery ${ETCD_DISCOVERY} \
+        --addr 127.0.0.1:4001 \
+        --bind-addr 127.0.0.1:4001 \
         --data-dir /var/lib/etcd \
-        --http-read-timeout 86400 \
-        --peer-addr $private_ipv4:7001 \
-        --snapshot true
+        --peer-addr $private_ipv4:2380 \
+        --peer-bind-addr $private_ipv4:2380 \
+        --peer-ca-file=/opt/kubernetes/.etcd/ca.crt \
+        --peer-cert-file=/opt/kubernetes/.etcd/${MASTER_NAME}.crt \
+        --peer-key-file=/opt/kubernetes/.etcd/${MASTER_NAME}.key.insecure
         Restart=always
         RestartSec=10s
 
@@ -99,7 +103,7 @@ coreos:
         ExecStart=/opt/kubernetes/server/bin/kube-apiserver \
             --address=0.0.0.0 \
             --port=8080 \
-            --etcd_servers=http://$private_ipv4:4001 \
+            --etcd_servers=http://127.0.0.1:4001 \
             --cloud_provider=gce \
             --allow_privileged=false \
             --portal_net=${PORTAL_NET} \
