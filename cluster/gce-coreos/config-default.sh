@@ -26,7 +26,7 @@ MINION_DISK_SIZE=10GB
 # TODO(dchen1107): Filed an internal issue to create an alias
 # for containervm image, so that gcloud will expand this
 # to the latest supported image.
-IMAGE=coreos-stable-522-6-0-v20150128
+IMAGE=coreos-stable-557-2-0-v20150210
 IMAGE_PROJECT=coreos-cloud
 NETWORK=${KUBE_GCE_NETWORK:-default}
 INSTANCE_PREFIX="${KUBE_GCE_INSTANCE_PREFIX:-kubernetes}"
