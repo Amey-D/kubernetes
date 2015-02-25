@@ -104,6 +104,9 @@ fi
 detect-master > /dev/null
 if [[ -n "${KUBE_MASTER_IP-}" && -z "${KUBERNETES_MASTER-}" ]]; then
   export KUBERNETES_MASTER=https://${KUBE_MASTER_IP}
+  if [[ -n ${KUBE_APISERVER_SECURE_PORT} ]]; then
+    export KUBERNETES_MASTER=https://${KUBE_MASTER_IP}:${KUBE_APISERVER_SECURE_PORT}
+  fi
 fi
 
 "${kubecfg}" "${auth_config[@]:+${auth_config[@]}}" "${@}"
