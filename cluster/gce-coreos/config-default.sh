@@ -39,6 +39,7 @@ MINION_NAMES=($(eval echo ${INSTANCE_PREFIX}-minion-{1..${NUM_MINIONS}}))
 # XXX Remote this option once we decide which clustering method to use.
 COREOS_CLUSTER="${COREOS_CLUSTER:-etcd}"
 KUBE_DISCOVERY_URL=""
+KUBE_APISERVER_SECURE_PORT=8443
 
 # Compute IP addresses for nodes.
 function increment_ipv4 {

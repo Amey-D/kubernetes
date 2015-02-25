@@ -38,9 +38,9 @@ coreos:
         --data-dir /var/lib/etcd \
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \
-        --peer-ca-file=/opt/kubernetes/.etcd/ca.crt \
-        --peer-cert-file=/opt/kubernetes/.etcd/${MASTER_NAME}.crt \
-        --peer-key-file=/opt/kubernetes/.etcd/${MASTER_NAME}.key.insecure
+        --peer-ca-file=/opt/kubernetes/.kube/ca.crt \
+        --peer-cert-file=/opt/kubernetes/.kube/${MASTER_NAME}-etcd.crt \
+        --peer-key-file=/opt/kubernetes/.kube/${MASTER_NAME}-etcd.key.insecure
         Restart=always
         RestartSec=10s
 
@@ -103,10 +103,14 @@ coreos:
         ExecStart=/opt/kubernetes/server/bin/kube-apiserver \
             --address=0.0.0.0 \
             --port=8080 \
+            --secure_port=${KUBE_APISERVER_SECURE_PORT} \
             --etcd_servers=http://127.0.0.1:4001 \
+            --tls_cert_file=/opt/kubernetes/.kube/apiserver.crt \
+            --tls_private_key_file=/opt/kubernetes/.kube/${MASTER_NAME}-kube.key.insecure \
             --cloud_provider=gce \
             --allow_privileged=false \
             --portal_net=${PORTAL_NET} \
+            --v=2 \
             --logtostderr=true
 
     - name: kube-scheduler.service
@@ -123,8 +127,10 @@ coreos:
         After=kube-apiserver.service
 
         [Service]
+        EnvironmentFile=/etc/kubernetes-master-params
         ExecStart=/opt/kubernetes/server/bin/kube-scheduler \
             --master=127.0.0.1:8080 \
+            --v=2 \
             --logtostderr=true
         Restart=always
         RestartSec=10
@@ -148,6 +154,7 @@ coreos:
             --master=127.0.0.1:8080 \
             --cloud_provider=gce \
             --minion_regexp='${NODE_INSTANCE_PREFIX}.*' \
+            --v=2 \
             --logtostderr=true
         Restart=always
         RestartSec=10

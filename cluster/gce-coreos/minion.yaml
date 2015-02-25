@@ -37,9 +37,9 @@ coreos:
         --data-dir /var/lib/etcd \
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \
-        --peer-ca-file=/opt/kubernetes/.etcd/ca.crt \
-        --peer-cert-file=/opt/kubernetes/.etcd/${KUBE_MINION_HOSTNAME}.crt \
-        --peer-key-file=/opt/kubernetes/.etcd/${KUBE_MINION_HOSTNAME}.key.insecure
+        --peer-ca-file=/opt/kubernetes/.kube/ca.crt \
+        --peer-cert-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}-etcd.crt \
+        --peer-key-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}-etcd.key.insecure
         Restart=always
         RestartSec=10s
 

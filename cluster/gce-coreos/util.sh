@@ -193,7 +193,7 @@ function detect-master () {
     exit 1
   fi
   echo "Using master: $KUBE_MASTER (external IP: $KUBE_MASTER_IP)"
-  export KUBERNETES_MASTER_HOSTPORT="http://${KUBE_MASTER_IP}:8080"
+  export KUBERNETES_MASTER_HOSTPORT="https://${KUBE_MASTER_IP}:${KUBE_APISERVER_SECURE_PORT}"
 }
 
 # Ensure that we have a password created for validating to the master.  Will
@@ -366,30 +366,31 @@ function ensure-discovery-url {
 # cert management.
 # XXX etcd-ca tool is used for its simplicity.  This should probably be replaced
 # by more commonly used tools such as openssl or easyrsa,
-function ensure-etcd-ca-certs {
+function ensure-ca-certs {
   set -x
   certs_dir=$1
   password=$2
 
-  echo "+++ Checking CA certs ..."
-  if [[ ! -r ${certs_dir}/ca.crt ]] || [[ ! -r ${certs_dir}/ca.key ]]; then
-    echo "++++ Generate CA certs ..."
-    etcd-ca --depot-path ${certs_dir} init --passphrase ${password}
-  fi
-  echo "+++ Done checking CA certs."
+  echo "+++ Removing old etcd certs ..."
+  rm -rf "${certs_dir}"/*.crt "${certs_dir}"/*.key  "${certs_dir}"/*.csr
+
+  echo "++++ Generating CA certs ..."
+  etcd-ca --depot-path ${certs_dir} init --passphrase ${password}
+
   set +x
 }
 
 # Generate a CSR, signed certs and keys for the given host based on the
 # given IP address.
-function ensure-etcd-host-certs {
+function ensure-host-certs {
   set -x
   ipaddr=${1}
   hostname=${2}
   password=$3
   certs_dir="$4"
   echo "+++ Generate certs for host: ${hostname}, IP: ${ipaddr}"
-  rm -f "${certs_dir}/${hostname}.host.csr"  # delete old CSR for this host if it exists.
+
+  # Delete old csr, crt and key files for this host if they exist.
   etcd-ca --depot-path ${certs_dir} new-cert --passphrase ${password} --ip "${ipaddr}" ${hostname}
   etcd-ca --depot-path ${certs_dir} sign --passphrase ${password} ${hostname}
   etcd-ca --depot-path ${certs_dir} export --insecure --passphrase ${password} ${hostname} > ${certs_dir}/${hostname}.tar
@@ -397,20 +398,42 @@ function ensure-etcd-host-certs {
   set +x
 }
 
-function copy-etcd-certs {
+function ensure-kube-client-certs {
+  set -x
+  password=$1
+  certs_dir="$2"
+  echo "+++ Generate certs for kubecfg"
+
+  # Delete old csr, crt and key files for this host if they exist.
+  etcd-ca --depot-path ${certs_dir} new-cert --passphrase ${password} kubecfg
+  etcd-ca --depot-path ${certs_dir} sign --passphrase ${password} --client_only=1 kubecfg
+  etcd-ca --depot-path ${certs_dir} export --insecure --passphrase ${password} kubecfg > ${certs_dir}/kubecfg.tar
+  tar -C ${certs_dir} -xf ${certs_dir}/kubecfg.tar
+
+  echo "+++ Done generating certs for kubecfg"
+  set +x
+}
+
+function copy-certs {
   set -x
   hostname=${1}
-  remote_certs_dir=${2}
-  local_certs_dir=${3}
-  # XXX In the next few lines, there exists a time window during which the certs dir is world-readable.
-  # This needs to be fixed.
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo mkdir -p ${remote_certs_dir}"
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo chmod 0777 ${remote_certs_dir}"
-  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" "${local_certs_dir}/ca.crt" ${hostname}:${remote_certs_dir}
-  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" "${local_certs_dir}/${hostname}.tar" ${hostname}:${remote_certs_dir}
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" \
-      --command "sudo tar xf ${remote_certs_dir}/${hostname}.tar -C ${remote_certs_dir}"
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command "sudo chmod 0755 ${remote_certs_dir}"
+  appname=${2}
+  remote_certs_dir=${3}
+  local_certs_dir=${4}
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
+      "sudo mkdir -p ${remote_certs_dir}"
+  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" \
+      "${local_certs_dir}/ca.crt" root@${hostname}:${remote_certs_dir}
+  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" \
+      "${local_certs_dir}/${hostname}-${appname}.tar" root@${hostname}:${remote_certs_dir}
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
+      "sudo tar xf ${remote_certs_dir}/${hostname}-${appname}.tar -C ${remote_certs_dir}"
+
+  # XXX This is very hacky.  Move this logic to master.yaml.
+  if [[ "${appname}" = "kube" ]]; then
+    gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
+      "sudo bash -c 'cat ${remote_certs_dir}/${hostname}-${appname}.crt > ${remote_certs_dir}/apiserver.crt && cat ${remote_certs_dir}/ca.crt >> ${remote_certs_dir}/apiserver.crt'"
+  fi
   set +x
 }
 
@@ -465,6 +488,7 @@ function ensure-master-metadata {
     echo "ENABLE_NODE_MONITORING='${ENABLE_NODE_MONITORING:-false}'"
     echo "ENABLE_NODE_LOGGING='${ENABLE_NODE_LOGGING:-false}'"
     echo "LOGGING_DESTINATION='${LOGGING_DESTINATION:-}'"
+    echo "KUBE_APISERVER_SECURE_PORT='${KUBE_APISERVER_SECURE_PORT}'"
     echo "FLEET_METADATA='role=master'"
     echo "FLEET_ETCD_SERVERS=http://127.0.0.1:4001"
     if [ "etcd" == ${COREOS_CLUSTER} ]; then
@@ -522,17 +546,7 @@ function kube-up {
     --project "${PROJECT}" \
     --network "${NETWORK}" \
     --target-tags "${MASTER_TAG}" \
-    --allow tcp:443 &
-
-  # FIXME / HACK: IP-based security is a lot weaker than PKI, but it's a lot
-  # easier to set up for now.  This needs to be replaced with something safer.
-  MY_IP=$(curl -s -4 http://icanhazip.com)
-  gcloud compute firewall-rules create "${MASTER_NAME}-http" \
-    --project "${PROJECT}" \
-    --network "${NETWORK}" \
-    --target-tags "${MASTER_TAG}" \
-    --source-ranges "${MY_IP}/32" \
-    --allow tcp:8080 &
+    --allow tcp:${KUBE_APISERVER_SECURE_PORT} &
  
   #(
   #  echo "#! /bin/bash"
@@ -594,15 +608,18 @@ function kube-up {
   wait-for-jobs
   sleep 30  # let the master become available
   detect-master-internal-ip
+  detect-master
   local context="${INSTANCE_PREFIX}"
   local config_dir="${HOME}"/.kube/"${context}"
 
   set -x
-  local local_certs_dir="${config_dir}/.etcd"
-  local remote_certs_dir="/opt/kubernetes/.etcd"
-  ensure-etcd-ca-certs ${local_certs_dir} ${KUBE_PASSWORD}
-  ensure-etcd-host-certs ${KUBE_MASTER_INTERNAL_IP} ${MASTER_NAME} "${KUBE_PASSWORD}" ${local_certs_dir}
-  copy-etcd-certs ${MASTER_NAME} ${remote_certs_dir} ${local_certs_dir}
+  local local_certs_dir="${config_dir}"
+  local remote_certs_dir="/opt/kubernetes/.kube"
+  ensure-ca-certs ${local_certs_dir} ${KUBE_PASSWORD}
+  ensure-host-certs ${KUBE_MASTER_INTERNAL_IP} ${MASTER_NAME}-etcd "${KUBE_PASSWORD}" "${local_certs_dir}"
+  ensure-host-certs "${KUBE_MASTER_INTERNAL_IP},${KUBE_MASTER_IP}" ${MASTER_NAME}-kube "${KUBE_PASSWORD}" "${local_certs_dir}"
+  copy-certs ${MASTER_NAME} "etcd" ${remote_certs_dir} ${local_certs_dir}
+  copy-certs ${MASTER_NAME} "kube" ${remote_certs_dir} ${local_certs_dir}
 
   ensure-discovery-url
   ensure-master-metadata
@@ -662,8 +679,8 @@ function kube-up {
       --project "${PROJECT}" --zone "${ZONE}" "${minion_name}" \
       --fields networkInterfaces[0].networkIP --format=text \
       | awk '{ print $2 }')
-    ensure-etcd-host-certs ${minion_internal_ip} ${minion_name} "${KUBE_PASSWORD}" ${local_certs_dir}
-    copy-etcd-certs ${minion_name} ${remote_certs_dir} ${local_certs_dir}
+    ensure-host-certs ${minion_internal_ip} ${minion_name}-etcd "${KUBE_PASSWORD}" ${local_certs_dir}
+    copy-certs ${minion_name} "etcd" ${remote_certs_dir} ${local_certs_dir}
 
     ensure-minion-i-metadata $i ${minion_name}
     gcloud compute instances add-metadata "${minion_name}" \
@@ -692,7 +709,7 @@ function kube-up {
   echo "  up."
   echo
 
-  until curl --max-time 5 \
+  until curl --insecure --user "${KUBE_USER}:${KUBE_PASSWORD}" --max-time 5 \
           --fail --output /dev/null --silent "${KUBERNETES_MASTER_HOSTPORT}/api/v1beta1/pods"; do
       printf "."
       sleep 2
@@ -702,43 +719,40 @@ function kube-up {
 
   echo "!!! Skipping cert setup for k8s master !!!"
 
-  # local kube_cert="kubecfg.crt"
-  # local kube_key="kubecfg.key"
-  # local ca_cert="kubernetes.ca.crt"
+  ensure-kube-client-certs ${KUBE_PASSWORD} "${local_certs_dir}"
+  local kube_cert="kubecfg.crt"
+  local kube_key="kubecfg.key.insecure"
+  local ca_cert="ca.crt"
   # TODO use token instead of kube_auth
-  # local kube_auth="kubernetes_auth"
+  local kube_auth="kubernetes_auth"
 
-  # local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
-  # local user="${INSTANCE_PREFIX}-admin"
+  local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
+  local user="${INSTANCE_PREFIX}-admin"
 
   # TODO: generate ADMIN (and KUBELET) tokens and put those in the master's
   # config file.  Distribute the same way the htpasswd is done.
-  # (
-  #  mkdir -p "${config_dir}"
-  #  umask 077
-  #  gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.crt" >"${config_dir}/${kube_cert}" 2>/dev/null
-   # gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.key" >"${config_dir}/${kube_key}" 2>/dev/null
-   # gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/ca.crt" >"${config_dir}/${ca_cert}" 2>/dev/null
+  (
+   "${kubectl}" config set-cluster "${context}" \
+       --server="https://${KUBE_MASTER_IP}:${KUBE_APISERVER_SECURE_PORT}" \
+       --certificate-authority="${config_dir}/${ca_cert}" --global
+   "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
+   "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
+   "${kubectl}" config use-context "${context}" --global
 
-   # "${kubectl}" config set-cluster "${context}" --server="https://${KUBE_MASTER_IP}" --certificate-authority="${config_dir}/${ca_cert}" --global
-   # "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
-   # "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
-   # "${kubectl}" config use-context "${context}" --global
+   cat << EOF > "${config_dir}/${kube_auth}"
+{
+  "User": "$KUBE_USER",
+  "Password": "$KUBE_PASSWORD",
+  "CAFile": "${config_dir}/${ca_cert}",
+  "CertFile": "${config_dir}/${kube_cert}",
+  "KeyFile": "${config_dir}/${kube_key}"
+}
+EOF
 
-   # cat << EOF > "${config_dir}/${kube_auth}"
-# {
-#   "User": "$KUBE_USER",
-#   "Password": "$KUBE_PASSWORD",
-#   "CAFile": "${config_dir}/${ca_cert}",
-#   "CertFile": "${config_dir}/${kube_cert}",
-#   "KeyFile": "${config_dir}/${kube_key}"
-# }
-# EOF
-
-   # chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
-   #   "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
-   # echo "Wrote ${config_dir}/${kube_auth}"
-  # )
+   chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
+     "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
+   echo "Wrote ${config_dir}/${kube_auth}"
+  )
 
   echo "Sanity checking cluster..."
   sleep 30  # XXX If we try ssh without sleep, it asks for password.  Why?
@@ -772,8 +786,6 @@ function kube-up {
   echo
   echo -e "${color_yellow}  ${KUBERNETES_MASTER_HOSTPORT} ${color_norm}"
   echo
-  # echo -e "${color_green}The user name and password to use is located in ${config_dir}/${kube_auth}.${color_norm}"
-  echo "${color_red} !!! There is no authentication aside from your IP.  You have no security. !!! ${color_norm}"
   echo
 }
 
