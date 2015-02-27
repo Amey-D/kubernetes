@@ -119,11 +119,7 @@ coreos:
         [Unit]
         Description=Kubernetes Scheduler
         Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-        Requires=kubernetes-install-master.service
-        Requires=kubernetes-master-params.service
         Requires=kube-apiserver.service
-        After=kubernetes-install-master.service
-        After=kubernetes-master-params.service
         After=kube-apiserver.service
 
         [Service]
@@ -141,11 +137,7 @@ coreos:
         [Unit]
         Description=Kubernetes Controller Manager
         Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-        Requires=kubernetes-install-master.service
-        Requires=kubernetes-master-params.service
         Requires=kube-apiserver.service
-        After=kubernetes-install-master.service
-        After=kubernetes-master-params.service
         After=kube-apiserver.service
 
         [Service]

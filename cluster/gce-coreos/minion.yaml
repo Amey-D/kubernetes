@@ -54,15 +54,64 @@ coreos:
       content: |
         [Unit]
         Description=fleet daemon
-        Wants=kubernetes-minion-params.service
+        Requires=kubernetes-minion-params.service
         After=kubernetes-minion-params.service
-        Wants=fleet.socket
+        Requires=fleet.socket
         After=fleet.socket
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/usr/bin/fleetd
         Restart=always
         RestartSec=10s
+
+    - name: container-bridge.service
+      command: start
+      content: |
+        [Unit]
+        Description=Fetches and runs container_bridge.sh script
+        Requires=network-online.target
+        After=network-online.target
+        Requires=kubernetes-minion-params.service
+        After=kubernetes-minion-params.service
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/kubernetes-minion-params
+        ExecStartPre=/usr/bin/mkdir -p /opt/kubernetes
+        ExecStartPre=/bin/curl --fail --silent --show-error \
+        -H "X-Google-Metadata-Request: True" \
+        -o /opt/kubernetes/container_bridge.sh \
+        http://169.254.169.254/computeMetadata/v1/instance/attributes/container-bridge-sh
+        ExecStartPre=/usr/bin/chmod 0755 /opt/kubernetes/container_bridge.sh
+        ExecStart=/opt/kubernetes/container_bridge.sh
+
+    - name: docker.service
+      command: start
+      content: |
+        [Unit]
+        Description=Docker Application Container Engine
+        Documentation=http://docs.docker.com
+        Requires=network-online.target
+        After=network-online.target
+        Requires=docker.socket
+        After=docker.socket
+        Requires=container-bridge.service
+        After=container-bridge.service
+
+        [Service]
+        LimitNOFILE=1048576
+        LimitNPROC=1048576
+        Environment=TMPDIR=/var/tmp
+        EnvironmentFile=/etc/kubernetes-minion-params
+        ExecStart=/usr/bin/docker -D -d \
+        --host=unix:///var/run/docker.sock \
+        --bridge="cbr0" \
+        --iptables=false \
+        --ip-masq=false
+
+        Restart=always
+        RestartSec=10
 
     - name: kubernetes-install-minion.service
       command: start
@@ -89,17 +138,19 @@ coreos:
         Description=Kubelet
         Requires=kubernetes-install-minion.service
         After=kubernetes-install-minion.service
-        Requires=kubernetes-minion-params.service
-        After=kubernetes-minion-params.service
+        Requires=docker.socket
+        After=docker.socket
 
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kubelet \
+        --address=$private_ipv4 \
         --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --api_servers=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
         --address=0.0.0.0 \
         --config=/etc/kubernetes/manifests \
         --allow_privileged=false \
+        --v=1 \
         --logtostderr=true
 
     - name: kube-proxy.service
@@ -107,53 +158,14 @@ coreos:
       content: |
         [Unit]
         Description=Kubelet
-        Requires=kubernetes-install-minion.service
-        After=kubernetes-install-minion.service
-        Requires=kubernetes-minion-params.service
-        After=kubernetes-minion-params.service
+        Requires=kubelet.service
+        After=kubelet.service
 
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kube-proxy \
         --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --master=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
+        --v=1 \
         --logtostderr=true
 
-    - name: container-bridge.service
-      command: start
-      content: |
-        [Unit]
-        Description=Fetches and runs container_bridge.sh script
-        Requires=network-online.target
-        After=network-online.target
-
-        [Service]
-        Type=oneshot
-        RemainAfterExit=yes
-        EnvironmentFile=/etc/kubernetes-minion-params
-        ExecStartPre=/usr/bin/mkdir -p /opt/kubernetes
-        ExecStartPre=/bin/curl --fail --silent --show-error \
-        -H "X-Google-Metadata-Request: True" \
-        -o /opt/kubernetes/container_bridge.sh \
-        http://169.254.169.254/computeMetadata/v1/instance/attributes/container-bridge-sh
-        ExecStartPre=/usr/bin/chmod 0755 /opt/kubernetes/container_bridge.sh
-        ExecStart=/opt/kubernetes/container_bridge.sh
-
-    - name: docker.service
-      command: start
-      content: |
-        [Unit]
-        Description=Docker Application Container Engine
-        Documentation=http://docs.docker.com
-        After=docker.socket network-online.target
-        Requires=docker.socket network-online.target
-
-        [Service]
-        LimitNOFILE=1048576
-        LimitNPROC=1048576
-        Environment=TMPDIR=/var/tmp
-        Environment=DOCKER_OPTS='--bridge="cbr0" --iptables=false --ip-masq=false -r=false'
-        EnvironmentFile=/etc/kubernetes-minion-params
-        ExecStart=/usr/bin/docker -d --host=fd:// $DOCKER_OPTS $EXTRA_DOCKER_OPTS
-        Restart=always
-        RestartSec=10
