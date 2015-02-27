@@ -33,8 +33,8 @@ coreos:
         ExecStart=/usr/bin/etcd \
         --name ${MASTER_NAME} \
         --discovery ${ETCD_DISCOVERY} \
-        --addr 127.0.0.1:4001 \
-        --bind-addr 127.0.0.1:4001 \
+        --addr $private_ipv4:4001 \
+        --bind-addr 0.0.0.0 \
         --data-dir /var/lib/etcd \
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \

@@ -32,8 +32,8 @@ coreos:
         ExecStart=/usr/bin/etcd \
         --name ${KUBE_MINION_HOSTNAME} \
         --discovery ${ETCD_DISCOVERY} \
-        --addr 127.0.0.1:4001 \
-        --bind-addr 127.0.0.1:4001 \
+        --addr $private_ipv4:4001 \
+        --bind-addr 0.0.0.0 \
         --data-dir /var/lib/etcd \
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \
@@ -144,7 +144,6 @@ coreos:
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kubelet \
-        --address=$private_ipv4 \
         --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --api_servers=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
         --address=0.0.0.0 \
