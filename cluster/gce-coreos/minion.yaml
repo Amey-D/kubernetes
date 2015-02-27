@@ -144,12 +144,12 @@ coreos:
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kubelet \
-        --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --api_servers=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
+        --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --address=0.0.0.0 \
-        --config=/etc/kubernetes/manifests \
+        --hostname_override=${KUBE_MINION_HOSTNAME} \
         --allow_privileged=false \
-        --v=1 \
+        --v=2 \
         --logtostderr=true
 
     - name: kube-proxy.service
@@ -163,8 +163,7 @@ coreos:
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
         ExecStart=/opt/kubernetes/server/bin/kube-proxy \
-        --etcd_servers='${KUBELET_ETCD_SERVERS}' \
         --master=http://${KUBE_MASTER_INTERNAL_IP}:8080 \
-        --v=1 \
+        --v=2 \
         --logtostderr=true
 
