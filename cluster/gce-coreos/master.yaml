@@ -28,7 +28,6 @@ coreos:
 
         [Service]
         EnvironmentFile=/etc/kubernetes-master-params
-        User=etcd
         PermissionsStartOnly=true
         ExecStart=/usr/bin/etcd \
         --name ${MASTER_NAME} \
@@ -39,8 +38,8 @@ coreos:
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \
         --peer-ca-file=/opt/kubernetes/.kube/ca.crt \
-        --peer-cert-file=/opt/kubernetes/.kube/${MASTER_NAME}-etcd.crt \
-        --peer-key-file=/opt/kubernetes/.kube/${MASTER_NAME}-etcd.key.insecure
+        --peer-cert-file=/opt/kubernetes/.kube/${MASTER_NAME}.crt \
+        --peer-key-file=/opt/kubernetes/.kube/${MASTER_NAME}.key
         Restart=always
         RestartSec=10s
 
@@ -100,13 +99,14 @@ coreos:
 
         [Service]
         EnvironmentFile=/etc/kubernetes-master-params
+        ExecStartPre=/usr/bin/bash -c "cp /opt/kubernetes/.kube/ameyd-k8s-master.crt /opt/kubernetes/.kube/apiserver.crt && cat /opt/kubernetes/.kube/ca.crt >> /opt/kubernetes/.kube/apiserver.crt"
         ExecStart=/opt/kubernetes/server/bin/kube-apiserver \
             --address=0.0.0.0 \
             --port=8080 \
             --secure_port=${KUBE_APISERVER_SECURE_PORT} \
             --etcd_servers=http://127.0.0.1:4001 \
             --tls_cert_file=/opt/kubernetes/.kube/apiserver.crt \
-            --tls_private_key_file=/opt/kubernetes/.kube/${MASTER_NAME}-kube.key.insecure \
+            --tls_private_key_file=/opt/kubernetes/.kube/${MASTER_NAME}.key \
             --cloud_provider=gce \
             --allow_privileged=false \
             --portal_net=${PORTAL_NET} \

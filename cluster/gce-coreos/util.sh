@@ -192,6 +192,11 @@ function detect-master () {
     echo "Could not detect Kubernetes master node.  Make sure you've launched a cluster with 'kube-up.sh'" >&2
     exit 1
   fi
+  KUBE_MASTER_INTERNAL_IP=$(gcloud compute instances describe \
+    --project "${PROJECT}" --zone "${ZONE}" "${MASTER_NAME}" \
+    --fields networkInterfaces[0].networkIP --format=text \
+    | awk '{ print $2 }')
+
   echo "Using master: $KUBE_MASTER (external IP: $KUBE_MASTER_IP)"
   export KUBERNETES_MASTER_HOSTPORT="https://${KUBE_MASTER_IP}:${KUBE_APISERVER_SECURE_PORT}"
 }
@@ -338,24 +343,12 @@ function create-minion {
   done
 }
 
-# Requires:
-#  PROJECT, ZONE, MASTER_NAME,
-#  and an up-and-running master.
-# Provides:
-#  KUBE_MASTER_INTERNAL_IP
-function detect-master-internal-ip {
-  KUBE_MASTER_INTERNAL_IP=$(gcloud compute instances describe \
-    --project "${PROJECT}" --zone "${ZONE}" "${MASTER_NAME}" \
-    --fields networkInterfaces[0].networkIP --format=text \
-    | awk '{ print $2 }')
-}
-
 # Provides:
 #  KUBE_DISCOVERY_URL
 # XXX OK to use the public discovery service by CoreOS?
 function ensure-discovery-url {
   if [ "etcd" == ${COREOS_CLUSTER} ] && [ -z ${KUBE_DISCOVERY_URL} ]; then
-    KUBE_DISCOVERY_URL=$(curl -w "\n" https://discovery.etcd.io/new)
+    KUBE_DISCOVERY_URL=$(curl --fail -w "\n" https://discovery.etcd.io/new)
   fi
   echo "+++ Discovery URL: ${KUBE_DISCOVERY_URL}"
 }
@@ -369,71 +362,65 @@ function ensure-discovery-url {
 function ensure-ca-certs {
   set -x
   certs_dir=$1
-  password=$2
 
   echo "+++ Removing old etcd certs ..."
   rm -rf "${certs_dir}"/*.crt "${certs_dir}"/*.key  "${certs_dir}"/*.csr
 
-  echo "++++ Generating CA certs ..."
-  etcd-ca --depot-path ${certs_dir} init --passphrase ${password}
+  pushd "${KUBE_TEMP}"
+  curl -L -O https://storage.googleapis.com/kubernetes-release/easy-rsa/easy-rsa.tar.gz
+  tar xzf easy-rsa.tar.gz > /dev/null
+  popd
+  export EASYRSA="${KUBE_TEMP}/easy-rsa-master/easyrsa3"
+  export EASYRSA_EXT_DIR="${KUBE_TEMP}/easy-rsa-master/easyrsa3/x509-types"
+  export EASYRSA_SSL_CONF="${KUBE_TEMP}/easy-rsa-master/easyrsa3/openssl-1.0.cnf"
+  EASYRSA="${KUBE_TEMP}/easy-rsa-master/easyrsa3/easyrsa"
 
+  echo "++++ Generating CA certs ..."
+  "${EASYRSA}" --pki-dir="${certs_dir}" init-pki
+  "${EASYRSA}" --pki-dir="${certs_dir}" --batch "--req-cn=${INSTANCE_PREFIX}" build-ca nopass
+
+  # XXX It probably doesn't get hackier than this.
+  sed -i -e 's/serverAuth/serverAuth,clientAuth/g' "${EASYRSA_EXT_DIR}/server"
   set +x
 }
 
 # Generate a CSR, signed certs and keys for the given host based on the
 # given IP address.
-function ensure-host-certs {
+function ensure-server-certs {
   set -x
   ipaddr=${1}
   hostname=${2}
-  password=$3
-  certs_dir="$4"
+  certs_dir="$3"
   echo "+++ Generate certs for host: ${hostname}, IP: ${ipaddr}"
-
-  # Delete old csr, crt and key files for this host if they exist.
-  etcd-ca --depot-path ${certs_dir} new-cert --passphrase ${password} --ip "${ipaddr}" ${hostname}
-  etcd-ca --depot-path ${certs_dir} sign --passphrase ${password} ${hostname}
-  etcd-ca --depot-path ${certs_dir} export --insecure --passphrase ${password} ${hostname} > ${certs_dir}/${hostname}.tar
+  "${EASYRSA}" --pki-dir="${certs_dir}" --subject-alt-name=${ipaddr} build-server-full ${hostname} nopass
   echo "+++ Done generating certs for host: ${hostname}."
   set +x
 }
 
-function ensure-kube-client-certs {
+function ensure-client-certs {
   set -x
-  password=$1
-  certs_dir="$2"
+  certs_dir="$1"
   echo "+++ Generate certs for kubecfg"
 
-  # Delete old csr, crt and key files for this host if they exist.
-  etcd-ca --depot-path ${certs_dir} new-cert --passphrase ${password} kubecfg
-  etcd-ca --depot-path ${certs_dir} sign --passphrase ${password} --client_only=1 kubecfg
-  etcd-ca --depot-path ${certs_dir} export --insecure --passphrase ${password} kubecfg > ${certs_dir}/kubecfg.tar
-  tar -C ${certs_dir} -xf ${certs_dir}/kubecfg.tar
-
+  echo ${EASYRSA_SSL_CONF}
+  export EASYRSA_SSL_CONF="${KUBE_TEMP}/easy-rsa-master/easyrsa3/openssl-1.0.cnf"
+  "${EASYRSA}" --pki-dir="${certs_dir}" build-client-full kubecfg nopass
   echo "+++ Done generating certs for kubecfg"
   set +x
 }
 
-function copy-certs {
+function copy-server-certs {
   set -x
   hostname=${1}
-  appname=${2}
-  remote_certs_dir=${3}
-  local_certs_dir=${4}
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
-      "sudo mkdir -p ${remote_certs_dir}"
+  remote_certs_dir=${2}
+  local_certs_dir=${3}
+  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" \
+      --command "sudo mkdir -p ${remote_certs_dir}"
   gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" \
-      "${local_certs_dir}/ca.crt" root@${hostname}:${remote_certs_dir}
-  gcloud compute copy-files --project="${PROJECT}" --zone "${ZONE}" \
-      "${local_certs_dir}/${hostname}-${appname}.tar" root@${hostname}:${remote_certs_dir}
-  gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
-      "sudo tar xf ${remote_certs_dir}/${hostname}-${appname}.tar -C ${remote_certs_dir}"
-
-  # XXX This is very hacky.  Move this logic to master.yaml.
-  if [[ "${appname}" = "kube" ]]; then
-    gcloud compute ssh --project="${PROJECT}" --zone "${ZONE}" "${hostname}" --command \
-      "sudo bash -c 'cat ${remote_certs_dir}/${hostname}-${appname}.crt > ${remote_certs_dir}/apiserver.crt && cat ${remote_certs_dir}/ca.crt >> ${remote_certs_dir}/apiserver.crt'"
-  fi
+      "${local_certs_dir}/ca.crt" \
+      "${local_certs_dir}/issued/${hostname}.crt" \
+      "${local_certs_dir}/private/${hostname}.key" \
+      root@${hostname}:${remote_certs_dir}
   set +x
 }
 
@@ -607,19 +594,16 @@ function kube-up {
   # Wait for last batch of jobs.
   wait-for-jobs
   sleep 30  # let the master become available
-  detect-master-internal-ip
   detect-master
   local context="${INSTANCE_PREFIX}"
   local config_dir="${HOME}"/.kube/"${context}"
 
   set -x
-  local local_certs_dir="${config_dir}"
+  local local_certs_dir="${config_dir}/pki"
   local remote_certs_dir="/opt/kubernetes/.kube"
-  ensure-ca-certs ${local_certs_dir} ${KUBE_PASSWORD}
-  ensure-host-certs ${KUBE_MASTER_INTERNAL_IP} ${MASTER_NAME}-etcd "${KUBE_PASSWORD}" "${local_certs_dir}"
-  ensure-host-certs "${KUBE_MASTER_INTERNAL_IP},${KUBE_MASTER_IP}" ${MASTER_NAME}-kube "${KUBE_PASSWORD}" "${local_certs_dir}"
-  copy-certs ${MASTER_NAME} "etcd" ${remote_certs_dir} ${local_certs_dir}
-  copy-certs ${MASTER_NAME} "kube" ${remote_certs_dir} ${local_certs_dir}
+  ensure-ca-certs ${local_certs_dir}
+  ensure-server-certs "IP:${KUBE_MASTER_INTERNAL_IP},IP:${KUBE_MASTER_IP}" ${MASTER_NAME} "${local_certs_dir}"
+  copy-server-certs ${MASTER_NAME} ${remote_certs_dir} ${local_certs_dir}
 
   ensure-discovery-url
   ensure-master-metadata
@@ -679,8 +663,8 @@ function kube-up {
       --project "${PROJECT}" --zone "${ZONE}" "${minion_name}" \
       --fields networkInterfaces[0].networkIP --format=text \
       | awk '{ print $2 }')
-    ensure-host-certs ${minion_internal_ip} ${minion_name}-etcd "${KUBE_PASSWORD}" ${local_certs_dir}
-    copy-certs ${minion_name} "etcd" ${remote_certs_dir} ${local_certs_dir}
+    ensure-server-certs "IP:${minion_internal_ip}" ${minion_name} ${local_certs_dir}
+    copy-server-certs ${minion_name} ${remote_certs_dir} ${local_certs_dir}
 
     ensure-minion-i-metadata $i ${minion_name}
     gcloud compute instances add-metadata "${minion_name}" \
@@ -719,9 +703,9 @@ function kube-up {
 
   echo "!!! Skipping cert setup for k8s master !!!"
 
-  ensure-kube-client-certs ${KUBE_PASSWORD} "${local_certs_dir}"
+  ensure-client-certs "${local_certs_dir}"
   local kube_cert="kubecfg.crt"
-  local kube_key="kubecfg.key.insecure"
+  local kube_key="kubecfg.key"
   local ca_cert="ca.crt"
   # TODO use token instead of kube_auth
   local kube_auth="kubernetes_auth"
@@ -734,7 +718,7 @@ function kube-up {
   (
    "${kubectl}" config set-cluster "${context}" \
        --server="https://${KUBE_MASTER_IP}:${KUBE_APISERVER_SECURE_PORT}" \
-       --certificate-authority="${config_dir}/${ca_cert}" --global
+       --certificate-authority="${local_certs_dir}/${ca_cert}" --global
    "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
    "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
    "${kubectl}" config use-context "${context}" --global
@@ -743,14 +727,14 @@ function kube-up {
 {
   "User": "$KUBE_USER",
   "Password": "$KUBE_PASSWORD",
-  "CAFile": "${config_dir}/${ca_cert}",
-  "CertFile": "${config_dir}/${kube_cert}",
-  "KeyFile": "${config_dir}/${kube_key}"
+  "CAFile": "${local_certs_dir}/${ca_cert}",
+  "CertFile": "${local_certs_dir}/issued/${kube_cert}",
+  "KeyFile": "${local_certs_dir}/private/${kube_key}"
 }
 EOF
 
-   chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
-     "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
+   chmod 0600 "${config_dir}/${kube_auth}" "${local_certs_dir}/issued/$kube_cert" \
+     "${local_certs_dir}/private/${kube_key}" "${local_certs_dir}/${ca_cert}"
    echo "Wrote ${config_dir}/${kube_auth}"
   )
 

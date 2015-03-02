@@ -27,7 +27,6 @@ coreos:
         After=kubernetes-minion-params.service
         [Service]
         EnvironmentFile=/etc/kubernetes-minion-params
-        User=etcd
         PermissionsStartOnly=true
         ExecStart=/usr/bin/etcd \
         --name ${KUBE_MINION_HOSTNAME} \
@@ -38,8 +37,8 @@ coreos:
         --peer-addr $private_ipv4:2380 \
         --peer-bind-addr $private_ipv4:2380 \
         --peer-ca-file=/opt/kubernetes/.kube/ca.crt \
-        --peer-cert-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}-etcd.crt \
-        --peer-key-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}-etcd.key.insecure
+        --peer-cert-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}.crt \
+        --peer-key-file=/opt/kubernetes/.kube/${KUBE_MINION_HOSTNAME}.key
         Restart=always
         RestartSec=10s
 
