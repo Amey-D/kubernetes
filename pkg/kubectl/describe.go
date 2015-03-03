@@ -193,6 +193,14 @@ func (d *PodDescriber) Describe(namespace, name string) (string, error) {
 		fmt.Fprintf(out, "Labels:\t%s\n", formatLabels(pod.Labels))
 		fmt.Fprintf(out, "Status:\t%s\n", string(pod.Status.Phase))
 		fmt.Fprintf(out, "Replication Controllers:\t%s\n", getReplicationControllersForLabels(rc, labels.Set(pod.Labels)))
+		if len(pod.Status.Conditions) > 0 {
+			fmt.Fprint(out, "Conditions:\n  Type\tStatus\n")
+			for _, c := range pod.Status.Conditions {
+				fmt.Fprintf(out, "  %v \t%v \n",
+					c.Type,
+					c.Status)
+			}
+		}
 		if events != nil {
 			describeEvents(events, out)
 		}
@@ -260,8 +268,14 @@ func (d *ServiceDescriber) Describe(namespace, name string) (string, error) {
 		fmt.Fprintf(out, "Name:\t%s\n", service.Name)
 		fmt.Fprintf(out, "Labels:\t%s\n", formatLabels(service.Labels))
 		fmt.Fprintf(out, "Selector:\t%s\n", formatLabels(service.Spec.Selector))
+		fmt.Fprintf(out, "IP:\t%s\n", service.Spec.PortalIP)
+		if len(service.Spec.PublicIPs) > 0 {
+			list := strings.Join(service.Spec.PublicIPs, ", ")
+			fmt.Fprintf(out, "Public IPs:\t%s\n", list)
+		}
 		fmt.Fprintf(out, "Port:\t%d\n", service.Spec.Port)
-		fmt.Fprintf(out, "Endpoints:\t%s\n", stringList(endpoints.Endpoints))
+		fmt.Fprintf(out, "Endpoints:\t%s\n", formatEndpoints(endpoints.Endpoints))
+		fmt.Fprintf(out, "Session Affinity:\t%s\n", service.Spec.SessionAffinity)
 		if events != nil {
 			describeEvents(events, out)
 		}
@@ -281,10 +295,47 @@ func (d *MinionDescriber) Describe(namespace, name string) (string, error) {
 		return "", err
 	}
 
+	var pods []api.Pod
+	allPods, err := d.Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return "", err
+	}
+	for _, pod := range allPods.Items {
+		if pod.Status.Host != name {
+			continue
+		}
+		pods = append(pods, pod)
+	}
+
 	events, _ := d.Events(namespace).Search(minion)
 
 	return tabbedString(func(out io.Writer) error {
 		fmt.Fprintf(out, "Name:\t%s\n", minion.Name)
+		if len(minion.Status.Conditions) > 0 {
+			fmt.Fprint(out, "Conditions:\n  Type\tStatus\tLastProbeTime\tLastTransitionTime\tReason\tMessage\n")
+			for _, c := range minion.Status.Conditions {
+				fmt.Fprintf(out, "  %v \t%v \t%s \t%s \t%v \t%v\n",
+					c.Type,
+					c.Status,
+					c.LastProbeTime.Time.Format(time.RFC1123Z),
+					c.LastTransitionTime.Time.Format(time.RFC1123Z),
+					c.Reason,
+					c.Message)
+			}
+		}
+		if len(minion.Spec.Capacity) > 0 {
+			fmt.Fprintf(out, "Capacity:\n")
+			for resource, value := range minion.Spec.Capacity {
+				fmt.Fprintf(out, " %s:\t%s\n", resource, value.String())
+			}
+		}
+		fmt.Fprintf(out, "Pods:\t(%d in total)\n", len(pods))
+		for _, pod := range pods {
+			if pod.Status.Host != name {
+				continue
+			}
+			fmt.Fprintf(out, "  %s\n", pod.Name)
+		}
 		if events != nil {
 			describeEvents(events, out)
 		}
@@ -298,10 +349,12 @@ func describeEvents(el *api.EventList, w io.Writer) {
 		return
 	}
 	sort.Sort(SortableEvents(el.Items))
-	fmt.Fprint(w, "Events:\nTime\tFrom\tSubobjectPath\tReason\tMessage\n")
+	fmt.Fprint(w, "Events:\n  FirstSeen\tLastSeen\tCount\tFrom\tSubobjectPath\tReason\tMessage\n")
 	for _, e := range el.Items {
-		fmt.Fprintf(w, "%s\t%v\t%v\t%v\t%v\n",
+		fmt.Fprintf(w, "  %s\t%s\t%d\t%v\t%v\t%v\t%v\n",
 			e.FirstTimestamp.Time.Format(time.RFC1123Z),
+			e.LastTimestamp.Time.Format(time.RFC1123Z),
+			e.Count,
 			e.Source,
 			e.InvolvedObject.FieldPath,
 			e.Reason,

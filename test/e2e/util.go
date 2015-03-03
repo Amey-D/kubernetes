@@ -28,6 +28,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 
 	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 )
 
 type testContextType struct {
@@ -36,9 +37,18 @@ type testContextType struct {
 	host       string
 	repoRoot   string
 	provider   string
+	gceConfig  GCEConfig
 }
 
 var testContext testContextType
+
+func Logf(format string, a ...interface{}) {
+	fmt.Fprintf(GinkgoWriter, "INFO: "+format+"\n", a...)
+}
+
+func Failf(format string, a ...interface{}) {
+	Fail(fmt.Sprintf(format, a...), 1)
+}
 
 func waitForPodRunning(c *client.Client, id string, tryFor time.Duration) error {
 	trySecs := int(tryFor.Seconds())
@@ -51,7 +61,7 @@ func waitForPodRunning(c *client.Client, id string, tryFor time.Duration) error 
 		if pod.Status.Phase == api.PodRunning {
 			return nil
 		}
-		By(fmt.Sprintf("Waiting for pod %s status to be %q (found %q) (%d secs)", id, api.PodRunning, pod.Status.Phase, i))
+		Logf("Waiting for pod %s status to be %q (found %q) (%d secs)", id, api.PodRunning, pod.Status.Phase, i)
 	}
 	return fmt.Errorf("Gave up waiting for pod %s to be running after %d seconds", id, trySecs)
 }
@@ -65,14 +75,14 @@ func waitForPodNotPending(c *client.Client, ns, podName string, tryFor time.Dura
 		}
 		pod, err := c.Pods(ns).Get(podName)
 		if err != nil {
-			By(fmt.Sprintf("Get pod %s in namespace %s failed, ignoring for 5s: %v", podName, ns, err))
+			Logf("Get pod %s in namespace %s failed, ignoring for 5s: %v", podName, ns, err)
 			continue
 		}
 		if pod.Status.Phase != api.PodPending {
-			By(fmt.Sprintf("Saw pod %s in namespace %s out of pending state (found %q)", podName, ns, pod.Status.Phase))
+			Logf("Saw pod %s in namespace %s out of pending state (found %q)", podName, ns, pod.Status.Phase)
 			return nil
 		}
-		By(fmt.Sprintf("Waiting for status of pod %s in namespace %s to be !%q (found %q) (%v secs)", podName, ns, api.PodPending, pod.Status.Phase, i))
+		Logf("Waiting for status of pod %s in namespace %s to be !%q (found %q) (%v secs)", podName, ns, api.PodPending, pod.Status.Phase, i)
 	}
 	return fmt.Errorf("Gave up waiting for status of pod %s in namespace %s to go out of pending after %d seconds", podName, ns, trySecs)
 }
@@ -86,32 +96,32 @@ func waitForPodSuccess(c *client.Client, podName string, contName string, tryFor
 		}
 		pod, err := c.Pods(api.NamespaceDefault).Get(podName)
 		if err != nil {
-			By(fmt.Sprintf("Get pod failed, ignoring for 5s: %v", err))
+			Logf("Get pod failed, ignoring for 5s: %v", err)
 			continue
 		}
 		// Cannot use pod.Status.Phase == api.PodSucceeded/api.PodFailed due to #2632
 		ci, ok := pod.Status.Info[contName]
 		if !ok {
-			By(fmt.Sprintf("No Status.Info for container %s in pod %s yet", contName, podName))
+			Logf("No Status.Info for container %s in pod %s yet", contName, podName)
 		} else {
 			if ci.State.Termination != nil {
 				if ci.State.Termination.ExitCode == 0 {
 					By("Saw pod success")
 					return nil
 				} else {
-					By(fmt.Sprintf("Saw pod failure: %+v", ci.State.Termination))
+					Logf("Saw pod failure: %+v", ci.State.Termination)
 				}
-				By(fmt.Sprintf("Waiting for pod %q status to be success or failure", podName))
+				Logf("Waiting for pod %q status to be success or failure", podName)
 			} else {
-				By(fmt.Sprintf("Nil State.Termination for container %s in pod %s so far", contName, podName))
+				Logf("Nil State.Termination for container %s in pod %s so far", contName, podName)
 			}
 		}
 	}
 	return fmt.Errorf("Gave up waiting for pod %q status to be success or failure after %d seconds", podName, trySecs)
 }
 
-func loadClient() (*client.Client, error) {
-	config := client.Config{
+func loadConfig() (*client.Config, error) {
+	config := &client.Config{
 		Host: testContext.host,
 	}
 	info, err := clientauth.LoadFromFile(testContext.authConfig)
@@ -120,16 +130,21 @@ func loadClient() (*client.Client, error) {
 	}
 	// If the certificate directory is provided, set the cert paths to be there.
 	if testContext.certDir != "" {
-		By(fmt.Sprintf("Expecting certs in %v.", testContext.certDir))
+		Logf("Expecting certs in %v.", testContext.certDir)
 		info.CAFile = filepath.Join(testContext.certDir, "ca.crt")
 		info.CertFile = filepath.Join(testContext.certDir, "kubecfg.crt")
 		info.KeyFile = filepath.Join(testContext.certDir, "kubecfg.key")
 	}
-	config, err = info.MergeWithConfig(config)
+	mergedConfig, err := info.MergeWithConfig(*config)
+	return &mergedConfig, err
+}
+
+func loadClient() (*client.Client, error) {
+	config, err := loadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("Error creating client: %v", err.Error())
 	}
-	c, err := client.New(&config)
+	c, err := client.New(config)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating client: %v", err.Error())
 	}
@@ -143,4 +158,8 @@ func loadClient() (*client.Client, error) {
 func randomSuffix() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return strconv.Itoa(r.Int() % 10000)
+}
+
+func expectNoError(err error, explain ...interface{}) {
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), explain...)
 }

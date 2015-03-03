@@ -25,25 +25,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func (f *Factory) NewCmdResize(out io.Writer) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "resize [--resource-version=<version>] [--current-replicas=<count>] --replicas=<count> <resource> <id>",
-		Short: "Set a new size for a resizable resource (currently only Replication Controllers)",
-		Long: `Set a new size for a resizable resource (currently only Replication Controllers)
+const (
+	resize_long = `Set a new size for a Replication Controller.
 
 Resize also allows users to specify one or more preconditions for the resize action.
-The new size is specified by --replicas=<n>. You can also specify an optional precondition. 
-The two currently supported options are --current-replicas or --resource-version.
-If a precondition is specified, it is validated before the resize is attempted, and it is 
-guaranteed that the precondition holds true when the resize is sent to the server.
+If --current-replicas or --resource-version is specified, it is validated before the
+resize is attempted, and it is guaranteed that the precondition holds true when the
+resize is sent to the server.`
+	resize_example = `// Resize replication controller named 'foo' to 3.
+$ kubectl resize --replicas=3 replicationcontrollers foo
 
-Examples:
-  $ kubectl resize --replicas=3 replicationcontrollers foo
-  resized
+// If the replication controller named foo's current size is 2, resize foo to 3.
+$ kubectl resize --current-replicas=2 --replicas=3 replicationcontrollers foo`
+)
 
-  # will only execute if the current size is 2
-  $ kubectl resize --current-replicas=2 --replicas=3 replicationcontrollers foo
-`,
+func (f *Factory) NewCmdResize(out io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "resize [--resource-version=<version>] [--current-replicas=<count>] --replicas=<count> <resource> <id>",
+		Short:   "Set a new size for a Replication Controller.",
+		Long:    resize_long,
+		Example: resize_example,
 		Run: func(cmd *cobra.Command, args []string) {
 			count := util.GetFlagInt(cmd, "replicas")
 			if len(args) != 2 || count < 0 {
@@ -54,6 +55,7 @@ Examples:
 			checkErr(err)
 
 			mapper, _ := f.Object(cmd)
+			// TODO: use resource.Builder instead
 			mapping, namespace, name := util.ResourceFromArgs(cmd, args, mapper, cmdNamespace)
 
 			resizer, err := f.Resizer(cmd, mapping)
@@ -66,8 +68,8 @@ Examples:
 			fmt.Fprintf(out, "%s\n", s)
 		},
 	}
-	cmd.Flags().String("resource-version", "", "Precondition for resource version. Requires that the current resource version match this value in order to resize")
-	cmd.Flags().Int("current-replicas", -1, "Precondition for current size. Requires that the current size of the replication controller match this value in order to resize")
-	cmd.Flags().Int("replicas", -1, "The new number desired number of replicas.  Required.")
+	cmd.Flags().String("resource-version", "", "Precondition for resource version. Requires that the current resource version match this value in order to resize.")
+	cmd.Flags().Int("current-replicas", -1, "Precondition for current size. Requires that the current size of the replication controller match this value in order to resize.")
+	cmd.Flags().Int("replicas", -1, "The new desired number of replicas. Required.")
 	return cmd
 }

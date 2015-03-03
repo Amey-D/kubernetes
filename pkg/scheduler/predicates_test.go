@@ -56,7 +56,7 @@ func newResourcePod(usage ...resourceRequest) api.Pod {
 	containers := []api.Container{}
 	for _, req := range usage {
 		containers = append(containers, api.Container{
-			Resources: api.ResourceRequirementSpec{
+			Resources: api.ResourceRequirements{
 				Limits: api.ResourceList{
 					"cpu":    *resource.NewMilliQuantity(req.milliCPU, resource.DecimalSI),
 					"memory": *resource.NewQuantity(req.memory, resource.BinarySI),
@@ -277,7 +277,7 @@ func TestDiskConflicts(t *testing.T) {
 		Volumes: []api.Volume{
 			{
 				Source: api.VolumeSource{
-					GCEPersistentDisk: &api.GCEPersistentDisk{
+					GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{
 						PDName: "foo",
 					},
 				},
@@ -288,7 +288,7 @@ func TestDiskConflicts(t *testing.T) {
 		Volumes: []api.Volume{
 			{
 				Source: api.VolumeSource{
-					GCEPersistentDisk: &api.GCEPersistentDisk{
+					GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{
 						PDName: "bar",
 					},
 				},

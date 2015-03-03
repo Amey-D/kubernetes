@@ -147,21 +147,22 @@ func TestValidateAnnotations(t *testing.T) {
 
 func TestValidateVolumes(t *testing.T) {
 	successCase := []api.Volume{
-		{Name: "abc", Source: api.VolumeSource{HostPath: &api.HostPath{"/mnt/path1"}}},
-		{Name: "123", Source: api.VolumeSource{HostPath: &api.HostPath{"/mnt/path2"}}},
-		{Name: "abc-123", Source: api.VolumeSource{HostPath: &api.HostPath{"/mnt/path3"}}},
-		{Name: "empty", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}},
-		{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDisk{"my-PD", "ext4", 1, false}}},
-		{Name: "gitrepo", Source: api.VolumeSource{GitRepo: &api.GitRepo{"my-repo", "hashstring"}}},
+		{Name: "abc", Source: api.VolumeSource{HostPath: &api.HostPathVolumeSource{"/mnt/path1"}}},
+		{Name: "123", Source: api.VolumeSource{HostPath: &api.HostPathVolumeSource{"/mnt/path2"}}},
+		{Name: "abc-123", Source: api.VolumeSource{HostPath: &api.HostPathVolumeSource{"/mnt/path3"}}},
+		{Name: "empty", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}},
+		{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{"my-PD", "ext4", 1, false}}},
+		{Name: "gitrepo", Source: api.VolumeSource{GitRepo: &api.GitRepoVolumeSource{"my-repo", "hashstring"}}},
+		{Name: "secret", Source: api.VolumeSource{Secret: &api.SecretVolumeSource{api.ObjectReference{Namespace: api.NamespaceDefault, Name: "my-secret", Kind: "Secret"}}}},
 	}
 	names, errs := validateVolumes(successCase)
 	if len(errs) != 0 {
 		t.Errorf("expected success: %v", errs)
 	}
-	if len(names) != 6 || !names.HasAll("abc", "123", "abc-123", "empty", "gcepd", "gitrepo") {
+	if len(names) != len(successCase) || !names.HasAll("abc", "123", "abc-123", "empty", "gcepd", "gitrepo", "secret") {
 		t.Errorf("wrong names result: %v", names)
 	}
-	emptyVS := api.VolumeSource{EmptyDir: &api.EmptyDir{}}
+	emptyVS := api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}
 	errorCases := map[string]struct {
 		V []api.Volume
 		T errors.ValidationErrorType
@@ -194,7 +195,7 @@ func TestValidateVolumes(t *testing.T) {
 }
 
 func TestValidatePorts(t *testing.T) {
-	successCase := []api.Port{
+	successCase := []api.ContainerPort{
 		{Name: "abc", ContainerPort: 80, HostPort: 80, Protocol: "TCP"},
 		{Name: "easy", ContainerPort: 82, Protocol: "TCP"},
 		{Name: "as", ContainerPort: 83, Protocol: "UDP"},
@@ -206,7 +207,7 @@ func TestValidatePorts(t *testing.T) {
 		t.Errorf("expected success: %v", errs)
 	}
 
-	nonCanonicalCase := []api.Port{
+	nonCanonicalCase := []api.ContainerPort{
 		{ContainerPort: 80, Protocol: "TCP"},
 	}
 	if errs := validatePorts(nonCanonicalCase); len(errs) != 0 {
@@ -214,22 +215,22 @@ func TestValidatePorts(t *testing.T) {
 	}
 
 	errorCases := map[string]struct {
-		P []api.Port
+		P []api.ContainerPort
 		T errors.ValidationErrorType
 		F string
 		D string
 	}{
-		"name > 63 characters": {[]api.Port{{Name: strings.Repeat("a", 64), ContainerPort: 80, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].name", dnsLabelErrorMsg},
-		"name not a DNS label": {[]api.Port{{Name: "a.b.c", ContainerPort: 80, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].name", dnsLabelErrorMsg},
-		"name not unique": {[]api.Port{
+		"name > 63 characters": {[]api.ContainerPort{{Name: strings.Repeat("a", 64), ContainerPort: 80, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].name", dnsLabelErrorMsg},
+		"name not a DNS label": {[]api.ContainerPort{{Name: "a.b.c", ContainerPort: 80, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].name", dnsLabelErrorMsg},
+		"name not unique": {[]api.ContainerPort{
 			{Name: "abc", ContainerPort: 80, Protocol: "TCP"},
 			{Name: "abc", ContainerPort: 81, Protocol: "TCP"},
 		}, errors.ValidationErrorTypeDuplicate, "[1].name", ""},
-		"zero container port":    {[]api.Port{{ContainerPort: 0, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].containerPort", portRangeErrorMsg},
-		"invalid container port": {[]api.Port{{ContainerPort: 65536, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].containerPort", portRangeErrorMsg},
-		"invalid host port":      {[]api.Port{{ContainerPort: 80, HostPort: 65536, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].hostPort", portRangeErrorMsg},
-		"invalid protocol":       {[]api.Port{{ContainerPort: 80, Protocol: "ICMP"}}, errors.ValidationErrorTypeNotSupported, "[0].protocol", ""},
-		"protocol required":      {[]api.Port{{Name: "abc", ContainerPort: 80}}, errors.ValidationErrorTypeRequired, "[0].protocol", ""},
+		"zero container port":    {[]api.ContainerPort{{ContainerPort: 0, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].containerPort", portRangeErrorMsg},
+		"invalid container port": {[]api.ContainerPort{{ContainerPort: 65536, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].containerPort", portRangeErrorMsg},
+		"invalid host port":      {[]api.ContainerPort{{ContainerPort: 80, HostPort: 65536, Protocol: "TCP"}}, errors.ValidationErrorTypeInvalid, "[0].hostPort", portRangeErrorMsg},
+		"invalid protocol":       {[]api.ContainerPort{{ContainerPort: 80, Protocol: "ICMP"}}, errors.ValidationErrorTypeNotSupported, "[0].protocol", ""},
+		"protocol required":      {[]api.ContainerPort{{Name: "abc", ContainerPort: 80}}, errors.ValidationErrorTypeRequired, "[0].protocol", ""},
 	}
 	for k, v := range errorCases {
 		errs := validatePorts(v.P)
@@ -300,6 +301,59 @@ func TestValidateVolumeMounts(t *testing.T) {
 	for k, v := range errorCases {
 		if errs := validateVolumeMounts(v, volumes); len(errs) == 0 {
 			t.Errorf("expected failure for %s", k)
+		}
+	}
+}
+
+func TestValidateProbe(t *testing.T) {
+	handler := api.Handler{Exec: &api.ExecAction{Command: []string{"echo"}}}
+	successCases := []*api.Probe{
+		nil,
+		{TimeoutSeconds: 10, InitialDelaySeconds: 0, Handler: handler},
+		{TimeoutSeconds: 0, InitialDelaySeconds: 10, Handler: handler},
+	}
+	for _, p := range successCases {
+		if errs := validateProbe(p); len(errs) != 0 {
+			t.Errorf("expected success: %v", errs)
+		}
+	}
+
+	errorCases := []*api.Probe{
+		{TimeoutSeconds: 10, InitialDelaySeconds: 10},
+		{TimeoutSeconds: 10, InitialDelaySeconds: -10, Handler: handler},
+		{TimeoutSeconds: -10, InitialDelaySeconds: 10, Handler: handler},
+		{TimeoutSeconds: -10, InitialDelaySeconds: -10, Handler: handler},
+	}
+	for _, p := range errorCases {
+		if errs := validateProbe(p); len(errs) == 0 {
+			t.Errorf("expected failure for %v", p)
+		}
+	}
+}
+
+func TestValidateHandler(t *testing.T) {
+	successCases := []api.Handler{
+		{Exec: &api.ExecAction{Command: []string{"echo"}}},
+		{HTTPGet: &api.HTTPGetAction{Path: "/", Port: util.NewIntOrStringFromInt(1), Host: ""}},
+		{HTTPGet: &api.HTTPGetAction{Path: "/foo", Port: util.NewIntOrStringFromInt(65535), Host: "host"}},
+		{HTTPGet: &api.HTTPGetAction{Path: "/", Port: util.NewIntOrStringFromString("port"), Host: ""}},
+	}
+	for _, h := range successCases {
+		if errs := validateHandler(&h); len(errs) != 0 {
+			t.Errorf("expected success: %v", errs)
+		}
+	}
+
+	errorCases := []api.Handler{
+		{},
+		{Exec: &api.ExecAction{Command: []string{}}},
+		{HTTPGet: &api.HTTPGetAction{Path: "", Port: util.NewIntOrStringFromInt(0), Host: ""}},
+		{HTTPGet: &api.HTTPGetAction{Path: "/foo", Port: util.NewIntOrStringFromInt(65536), Host: "host"}},
+		{HTTPGet: &api.HTTPGetAction{Path: "", Port: util.NewIntOrStringFromString(""), Host: ""}},
+	}
+	for _, h := range errorCases {
+		if errs := validateHandler(&h); len(errs) == 0 {
+			t.Errorf("expected failure for %#v", h)
 		}
 	}
 }
@@ -378,7 +432,7 @@ func TestValidateContainers(t *testing.T) {
 		{
 			Name:  "resources-test",
 			Image: "image",
-			Resources: api.ResourceRequirementSpec{
+			Resources: api.ResourceRequirements{
 				Limits: api.ResourceList{
 					api.ResourceName(api.ResourceCPU):    resource.MustParse("10"),
 					api.ResourceName(api.ResourceMemory): resource.MustParse("10G"),
@@ -406,9 +460,9 @@ func TestValidateContainers(t *testing.T) {
 		},
 		"zero-length image": {{Name: "abc", Image: "", ImagePullPolicy: "IfNotPresent"}},
 		"host port not unique": {
-			{Name: "abc", Image: "image", Ports: []api.Port{{ContainerPort: 80, HostPort: 80, Protocol: "TCP"}},
+			{Name: "abc", Image: "image", Ports: []api.ContainerPort{{ContainerPort: 80, HostPort: 80, Protocol: "TCP"}},
 				ImagePullPolicy: "IfNotPresent"},
-			{Name: "def", Image: "image", Ports: []api.Port{{ContainerPort: 81, HostPort: 80, Protocol: "TCP"}},
+			{Name: "def", Image: "image", Ports: []api.ContainerPort{{ContainerPort: 81, HostPort: 80, Protocol: "TCP"}},
 				ImagePullPolicy: "IfNotPresent"},
 		},
 		"invalid env var name": {
@@ -442,12 +496,60 @@ func TestValidateContainers(t *testing.T) {
 				ImagePullPolicy: "IfNotPresent",
 			},
 		},
+		"invalid lifecycle, no tcp socket port.": {
+			{
+				Name:  "life-123",
+				Image: "image",
+				Lifecycle: &api.Lifecycle{
+					PreStop: &api.Handler{
+						TCPSocket: &api.TCPSocketAction{},
+					},
+				},
+				ImagePullPolicy: "IfNotPresent",
+			},
+		},
+		"invalid lifecycle, zero tcp socket port.": {
+			{
+				Name:  "life-123",
+				Image: "image",
+				Lifecycle: &api.Lifecycle{
+					PreStop: &api.Handler{
+						TCPSocket: &api.TCPSocketAction{
+							Port: util.IntOrString{IntVal: 0},
+						},
+					},
+				},
+				ImagePullPolicy: "IfNotPresent",
+			},
+		},
 		"invalid lifecycle, no action.": {
 			{
 				Name:  "life-123",
 				Image: "image",
 				Lifecycle: &api.Lifecycle{
 					PreStop: &api.Handler{},
+				},
+				ImagePullPolicy: "IfNotPresent",
+			},
+		},
+		"invalid liveness probe, no tcp socket port.": {
+			{
+				Name:  "life-123",
+				Image: "image",
+				LivenessProbe: &api.Probe{
+					Handler: api.Handler{
+						TCPSocket: &api.TCPSocketAction{},
+					},
+				},
+				ImagePullPolicy: "IfNotPresent",
+			},
+		},
+		"invalid liveness probe, no action.": {
+			{
+				Name:  "life-123",
+				Image: "image",
+				LivenessProbe: &api.Probe{
+					Handler: api.Handler{},
 				},
 				ImagePullPolicy: "IfNotPresent",
 			},
@@ -459,7 +561,7 @@ func TestValidateContainers(t *testing.T) {
 			{
 				Name:  "abc-123",
 				Image: "image",
-				Resources: api.ResourceRequirementSpec{
+				Resources: api.ResourceRequirements{
 					Limits: api.ResourceList{
 						"disk": resource.MustParse("10G"),
 					},
@@ -471,7 +573,7 @@ func TestValidateContainers(t *testing.T) {
 			{
 				Name:  "abc-123",
 				Image: "image",
-				Resources: api.ResourceRequirementSpec{
+				Resources: api.ResourceRequirements{
 					Limits: getResourceLimits("-10", "0"),
 				},
 				ImagePullPolicy: "IfNotPresent",
@@ -481,7 +583,7 @@ func TestValidateContainers(t *testing.T) {
 			{
 				Name:  "abc-123",
 				Image: "image",
-				Resources: api.ResourceRequirementSpec{
+				Resources: api.ResourceRequirements{
 					Limits: getResourceLimits("0", "-10"),
 				},
 				ImagePullPolicy: "IfNotPresent",
@@ -546,21 +648,21 @@ func TestValidateManifest(t *testing.T) {
 		{
 			Version: "v1beta1",
 			ID:      "abc",
-			Volumes: []api.Volume{{Name: "vol1", Source: api.VolumeSource{HostPath: &api.HostPath{"/mnt/vol1"}}},
-				{Name: "vol2", Source: api.VolumeSource{HostPath: &api.HostPath{"/mnt/vol2"}}}},
+			Volumes: []api.Volume{{Name: "vol1", Source: api.VolumeSource{HostPath: &api.HostPathVolumeSource{"/mnt/vol1"}}},
+				{Name: "vol2", Source: api.VolumeSource{HostPath: &api.HostPathVolumeSource{"/mnt/vol2"}}}},
 			Containers: []api.Container{
 				{
 					Name:       "abc",
 					Image:      "image",
 					Command:    []string{"foo", "bar"},
 					WorkingDir: "/tmp",
-					Resources: api.ResourceRequirementSpec{
+					Resources: api.ResourceRequirements{
 						Limits: api.ResourceList{
 							"cpu":    resource.MustParse("1"),
 							"memory": resource.MustParse("1"),
 						},
 					},
-					Ports: []api.Port{
+					Ports: []api.ContainerPort{
 						{Name: "p1", ContainerPort: 80, HostPort: 8080, Protocol: "TCP"},
 						{Name: "p2", ContainerPort: 81, Protocol: "TCP"},
 						{ContainerPort: 82, Protocol: "TCP"},
@@ -597,7 +699,7 @@ func TestValidateManifest(t *testing.T) {
 		"invalid volume name": {
 			Version:       "v1beta1",
 			ID:            "abc",
-			Volumes:       []api.Volume{{Name: "vol.1", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}}},
+			Volumes:       []api.Volume{{Name: "vol.1", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}}},
 			RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 			DNSPolicy:     api.DNSClusterFirst,
 		},
@@ -620,14 +722,14 @@ func TestValidateManifest(t *testing.T) {
 func TestValidatePodSpec(t *testing.T) {
 	successCases := []api.PodSpec{
 		{ // Populate basic fields, leave defaults for most.
-			Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}}},
+			Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}}},
 			Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 			RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 			DNSPolicy:     api.DNSClusterFirst,
 		},
 		{ // Populate all fields.
 			Volumes: []api.Volume{
-				{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}},
+				{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}},
 			},
 			Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 			RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
@@ -676,7 +778,7 @@ func TestValidatePod(t *testing.T) {
 		{ // Basic fields.
 			ObjectMeta: api.ObjectMeta{Name: "123", Namespace: "ns"},
 			Spec: api.PodSpec{
-				Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}}},
+				Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}}},
 				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 				DNSPolicy:     api.DNSClusterFirst,
@@ -686,7 +788,7 @@ func TestValidatePod(t *testing.T) {
 			ObjectMeta: api.ObjectMeta{Name: "abc.123.do-re-mi", Namespace: "ns"},
 			Spec: api.PodSpec{
 				Volumes: []api.Volume{
-					{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}},
+					{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}},
 				},
 				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
@@ -877,7 +979,7 @@ func TestValidatePodUpdate(t *testing.T) {
 					Containers: []api.Container{
 						{
 							Image: "foo:V1",
-							Resources: api.ResourceRequirementSpec{
+							Resources: api.ResourceRequirements{
 								Limits: getResourceLimits("100m", "0"),
 							},
 						},
@@ -890,7 +992,7 @@ func TestValidatePodUpdate(t *testing.T) {
 					Containers: []api.Container{
 						{
 							Image: "foo:V2",
-							Resources: api.ResourceRequirementSpec{
+							Resources: api.ResourceRequirements{
 								Limits: getResourceLimits("1000m", "0"),
 							},
 						},
@@ -907,7 +1009,7 @@ func TestValidatePodUpdate(t *testing.T) {
 					Containers: []api.Container{
 						{
 							Image: "foo:V1",
-							Ports: []api.Port{
+							Ports: []api.ContainerPort{
 								{HostPort: 8080, ContainerPort: 80},
 							},
 						},
@@ -920,7 +1022,7 @@ func TestValidatePodUpdate(t *testing.T) {
 					Containers: []api.Container{
 						{
 							Image: "foo:V2",
-							Ports: []api.Port{
+							Ports: []api.ContainerPort{
 								{HostPort: 8000, ContainerPort: 80},
 							},
 						},
@@ -978,7 +1080,7 @@ func TestValidateBoundPods(t *testing.T) {
 		{ // Basic fields.
 			ObjectMeta: api.ObjectMeta{Name: "123", Namespace: "ns"},
 			Spec: api.PodSpec{
-				Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}}},
+				Volumes:       []api.Volume{{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}}},
 				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 				DNSPolicy:     api.DNSClusterFirst,
@@ -988,7 +1090,7 @@ func TestValidateBoundPods(t *testing.T) {
 			ObjectMeta: api.ObjectMeta{Name: "abc.123.do-re-mi", Namespace: "ns"},
 			Spec: api.PodSpec{
 				Volumes: []api.Volume{
-					{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDir{}}},
+					{Name: "vol", Source: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}},
 				},
 				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
@@ -1450,7 +1552,7 @@ func TestValidateReplicationControllerUpdate(t *testing.T) {
 			Spec: api.PodSpec{
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 				DNSPolicy:     api.DNSClusterFirst,
-				Volumes:       []api.Volume{{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDisk{"my-PD", "ext4", 1, false}}}},
+				Volumes:       []api.Volume{{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{"my-PD", "ext4", 1, false}}}},
 			},
 		},
 	}
@@ -1608,7 +1710,7 @@ func TestValidateReplicationController(t *testing.T) {
 				Labels: validSelector,
 			},
 			Spec: api.PodSpec{
-				Volumes:       []api.Volume{{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDisk{"my-PD", "ext4", 1, false}}}},
+				Volumes:       []api.Volume{{Name: "gcepd", Source: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{"my-PD", "ext4", 1, false}}}},
 				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
 				DNSPolicy:     api.DNSClusterFirst,
 			},
@@ -2275,8 +2377,7 @@ func TestValidateLimitRange(t *testing.T) {
 		for i := range errs {
 			field := errs[i].(*errors.ValidationError).Field
 			detail := errs[i].(*errors.ValidationError).Detail
-			if field != "name" &&
-				field != "namespace" {
+			if field != "metadata.name" && field != "metadata.namespace" {
 				t.Errorf("%s: missing prefix for: %v", k, errs[i])
 			}
 			if detail != v.D {
@@ -2343,13 +2444,175 @@ func TestValidateResourceQuota(t *testing.T) {
 		for i := range errs {
 			field := errs[i].(*errors.ValidationError).Field
 			detail := errs[i].(*errors.ValidationError).Detail
-			if field != "name" &&
-				field != "namespace" {
+			if field != "metadata.name" && field != "metadata.namespace" {
 				t.Errorf("%s: missing prefix for: %v", k, errs[i])
 			}
 			if detail != v.D {
 				t.Errorf("%s: expected error detail either empty or %s, got %s", k, v.D, detail)
 			}
+		}
+	}
+}
+
+func TestValidateNamespace(t *testing.T) {
+	validLabels := map[string]string{"a": "b"}
+	invalidLabels := map[string]string{"NoUppercaseOrSpecialCharsLike=Equals": "b"}
+	successCases := []api.Namespace{
+		{
+			ObjectMeta: api.ObjectMeta{Name: "abc", Labels: validLabels},
+		},
+		{
+			ObjectMeta: api.ObjectMeta{Name: "abc-123"},
+		},
+	}
+	for _, successCase := range successCases {
+		if errs := ValidateNamespace(&successCase); len(errs) != 0 {
+			t.Errorf("expected success: %v", errs)
+		}
+	}
+	errorCases := map[string]struct {
+		R api.Namespace
+		D string
+	}{
+		"zero-length name": {
+			api.Namespace{ObjectMeta: api.ObjectMeta{Name: ""}},
+			"",
+		},
+		"defined-namespace": {
+			api.Namespace{ObjectMeta: api.ObjectMeta{Name: "abc-123", Namespace: "makesnosense"}},
+			"",
+		},
+		"invalid-labels": {
+			api.Namespace{ObjectMeta: api.ObjectMeta{Name: "abc", Labels: invalidLabels}},
+			"",
+		},
+	}
+	for k, v := range errorCases {
+		errs := ValidateNamespace(&v.R)
+		if len(errs) == 0 {
+			t.Errorf("expected failure for %s", k)
+		}
+	}
+}
+
+func TestValidateNamespaceUpdate(t *testing.T) {
+	tests := []struct {
+		oldNamespace api.Namespace
+		namespace    api.Namespace
+		valid        bool
+	}{
+		{api.Namespace{}, api.Namespace{}, true},
+		{api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name: "foo"}},
+			api.Namespace{
+				ObjectMeta: api.ObjectMeta{
+					Name: "bar"},
+			}, false},
+		{api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"foo": "bar"},
+			},
+		}, api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"foo": "baz"},
+			},
+		}, true},
+		{api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name: "foo",
+			},
+		}, api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"foo": "baz"},
+			},
+		}, true},
+		{api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"bar": "foo"},
+			},
+		}, api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"foo": "baz"},
+			},
+		}, true},
+		{api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"foo": "baz"},
+			},
+		}, api.Namespace{
+			ObjectMeta: api.ObjectMeta{
+				Name:   "foo",
+				Labels: map[string]string{"Foo": "baz"},
+			},
+		}, false},
+	}
+	for i, test := range tests {
+		errs := ValidateNamespaceUpdate(&test.oldNamespace, &test.namespace)
+		if test.valid && len(errs) > 0 {
+			t.Errorf("%d: Unexpected error: %v", i, errs)
+			t.Logf("%#v vs %#v", test.oldNamespace.ObjectMeta, test.namespace.ObjectMeta)
+		}
+		if !test.valid && len(errs) == 0 {
+			t.Errorf("%d: Unexpected non-error", i)
+		}
+	}
+}
+
+func TestValidateSecret(t *testing.T) {
+	validSecret := func() api.Secret {
+		return api.Secret{
+			ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "bar"},
+			Data: map[string][]byte{
+				"data-1": []byte("bar"),
+			},
+		}
+	}
+
+	var (
+		emptyName   = validSecret()
+		invalidName = validSecret()
+		emptyNs     = validSecret()
+		invalidNs   = validSecret()
+		overMaxSize = validSecret()
+		invalidKey  = validSecret()
+	)
+
+	emptyName.Name = ""
+	invalidName.Name = "NoUppercaseOrSpecialCharsLike=Equals"
+	emptyNs.Namespace = ""
+	invalidNs.Namespace = "NoUppercaseOrSpecialCharsLike=Equals"
+	overMaxSize.Data = map[string][]byte{
+		"over": make([]byte, api.MaxSecretSize+1),
+	}
+	invalidKey.Data["a..b"] = []byte("whoops")
+
+	tests := map[string]struct {
+		secret api.Secret
+		valid  bool
+	}{
+		"valid":             {validSecret(), true},
+		"empty name":        {emptyName, false},
+		"invalid name":      {invalidName, false},
+		"empty namespace":   {emptyNs, false},
+		"invalid namespace": {invalidNs, false},
+		"over max size":     {overMaxSize, false},
+		"invalid key":       {invalidKey, false},
+	}
+
+	for name, tc := range tests {
+		errs := ValidateSecret(&tc.secret)
+		if tc.valid && len(errs) > 0 {
+			t.Errorf("%v: Unexpected error: %v", name, errs)
+		}
+		if !tc.valid && len(errs) == 0 {
+			t.Errorf("%v: Unexpected non-error", name)
 		}
 	}
 }

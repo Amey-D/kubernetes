@@ -57,6 +57,7 @@ var versioner runtime.ResourceVersioner = accessor
 var selfLinker runtime.SelfLinker = accessor
 var mapper, namespaceMapper, legacyNamespaceMapper meta.RESTMapper // The mappers with namespace and with legacy namespace scopes.
 var admissionControl admission.Interface
+var requestContextMapper api.RequestContextMapper
 
 func interfacesFor(version string) (*meta.VersionInterfaces, error) {
 	switch version {
@@ -111,6 +112,7 @@ func init() {
 	legacyNamespaceMapper = legacyNsMapper
 	namespaceMapper = nsMapper
 	admissionControl = admit.NewAlwaysAdmit()
+	requestContextMapper = api.NewRequestContextMapper()
 }
 
 type Simple struct {
@@ -152,6 +154,9 @@ type SimpleRESTStorage struct {
 	updated *Simple
 	created *Simple
 
+	actualNamespace  string
+	namespacePresent bool
+
 	// These are set when Watch is called
 	fakeWatch                  *watch.FakeWatcher
 	requestedLabelSelector     labels.Selector
@@ -170,6 +175,7 @@ type SimpleRESTStorage struct {
 }
 
 func (storage *SimpleRESTStorage) List(ctx api.Context, label, field labels.Selector) (runtime.Object, error) {
+	storage.checkContext(ctx)
 	result := &SimpleList{
 		Items: storage.list,
 	}
@@ -177,20 +183,26 @@ func (storage *SimpleRESTStorage) List(ctx api.Context, label, field labels.Sele
 }
 
 func (storage *SimpleRESTStorage) Get(ctx api.Context, id string) (runtime.Object, error) {
+	storage.checkContext(ctx)
 	return api.Scheme.CopyOrDie(&storage.item), storage.errors["get"]
 }
 
-func (storage *SimpleRESTStorage) Delete(ctx api.Context, id string) (<-chan RESTResult, error) {
+func (storage *SimpleRESTStorage) checkContext(ctx api.Context) {
+	storage.actualNamespace, storage.namespacePresent = api.NamespaceFrom(ctx)
+}
+
+func (storage *SimpleRESTStorage) Delete(ctx api.Context, id string) (runtime.Object, error) {
+	storage.checkContext(ctx)
 	storage.deleted = id
 	if err := storage.errors["delete"]; err != nil {
 		return nil, err
 	}
-	return MakeAsync(func() (runtime.Object, error) {
-		if storage.injectedFunction != nil {
-			return storage.injectedFunction(&Simple{ObjectMeta: api.ObjectMeta{Name: id}})
-		}
-		return &api.Status{Status: api.StatusSuccess}, nil
-	}), nil
+	var obj runtime.Object = &api.Status{Status: api.StatusSuccess}
+	var err error
+	if storage.injectedFunction != nil {
+		obj, err = storage.injectedFunction(&Simple{ObjectMeta: api.ObjectMeta{Name: id}})
+	}
+	return obj, err
 }
 
 func (storage *SimpleRESTStorage) New() runtime.Object {
@@ -201,38 +213,39 @@ func (storage *SimpleRESTStorage) NewList() runtime.Object {
 	return &SimpleList{}
 }
 
-func (storage *SimpleRESTStorage) Create(ctx api.Context, obj runtime.Object) (<-chan RESTResult, error) {
+func (storage *SimpleRESTStorage) Create(ctx api.Context, obj runtime.Object) (runtime.Object, error) {
+	storage.checkContext(ctx)
 	storage.created = obj.(*Simple)
 	if err := storage.errors["create"]; err != nil {
 		return nil, err
 	}
-	return MakeAsync(func() (runtime.Object, error) {
-		if storage.injectedFunction != nil {
-			return storage.injectedFunction(obj)
-		}
-		return obj, nil
-	}), nil
+	var err error
+	if storage.injectedFunction != nil {
+		obj, err = storage.injectedFunction(obj)
+	}
+	return obj, err
 }
 
-func (storage *SimpleRESTStorage) Update(ctx api.Context, obj runtime.Object) (<-chan RESTResult, error) {
+func (storage *SimpleRESTStorage) Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error) {
+	storage.checkContext(ctx)
 	storage.updated = obj.(*Simple)
 	if err := storage.errors["update"]; err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return MakeAsync(func() (runtime.Object, error) {
-		if storage.injectedFunction != nil {
-			return storage.injectedFunction(obj)
-		}
-		return obj, nil
-	}), nil
+	var err error
+	if storage.injectedFunction != nil {
+		obj, err = storage.injectedFunction(obj)
+	}
+	return obj, false, err
 }
 
 // Implement ResourceWatcher.
 func (storage *SimpleRESTStorage) Watch(ctx api.Context, label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+	storage.checkContext(ctx)
 	storage.requestedLabelSelector = label
 	storage.requestedFieldSelector = field
 	storage.requestedResourceVersion = resourceVersion
-	storage.requestedResourceNamespace = api.Namespace(ctx)
+	storage.requestedResourceNamespace = api.NamespaceValue(ctx)
 	if err := storage.errors["watch"]; err != nil {
 		return nil, err
 	}
@@ -242,8 +255,9 @@ func (storage *SimpleRESTStorage) Watch(ctx api.Context, label, field labels.Sel
 
 // Implement Redirector.
 func (storage *SimpleRESTStorage) ResourceLocation(ctx api.Context, id string) (string, error) {
+	storage.checkContext(ctx)
 	// validate that the namespace context on the request matches the expected input
-	storage.requestedResourceNamespace = api.Namespace(ctx)
+	storage.requestedResourceNamespace = api.NamespaceValue(ctx)
 	if storage.expectedResourceNamespace != storage.requestedResourceNamespace {
 		return "", fmt.Errorf("Expected request namespace %s, but got namespace %s", storage.expectedResourceNamespace, storage.requestedResourceNamespace)
 	}
@@ -285,7 +299,7 @@ func TestNotFound(t *testing.T) {
 	}
 	handler := Handle(map[string]RESTStorage{
 		"foo": &SimpleRESTStorage{},
-	}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -337,7 +351,7 @@ func TestUnimplementedRESTStorage(t *testing.T) {
 	}
 	handler := Handle(map[string]RESTStorage{
 		"foo": UnimplementedRESTStorage{},
-	}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -362,7 +376,7 @@ func TestUnimplementedRESTStorage(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	handler := Handle(map[string]RESTStorage{}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(map[string]RESTStorage{}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -388,29 +402,57 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestSimpleList(t *testing.T) {
-	storage := map[string]RESTStorage{}
-	simpleStorage := SimpleRESTStorage{}
-	storage["simple"] = &simpleStorage
-	selfLinker := &setTestSelfLinker{
-		t:           t,
-		namespace:   "other",
-		expectedSet: "/prefix/version/simple?namespace=other",
+func TestList(t *testing.T) {
+	testCases := []struct {
+		url       string
+		namespace string
+		selfLink  string
+		legacy    bool
+	}{
+		{"/prefix/version/simple", "", "/prefix/version/simple?namespace=", true},
+		{"/prefix/version/simple?namespace=other", "other", "/prefix/version/simple?namespace=other", true},
+		// list items across all namespaces
+		{"/prefix/version/simple?namespace=", "", "/prefix/version/simple?namespace=", true},
+		{"/prefix/version/namespaces/default/simple", "default", "/prefix/version/namespaces/default/simple", false},
+		{"/prefix/version/namespaces/other/simple", "other", "/prefix/version/namespaces/other/simple", false},
+		// list items across all namespaces
+		{"/prefix/version/simple", "", "/prefix/version/simple", false},
 	}
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
-	server := httptest.NewServer(handler)
-	defer server.Close()
+	for i, testCase := range testCases {
+		storage := map[string]RESTStorage{}
+		simpleStorage := SimpleRESTStorage{expectedResourceNamespace: testCase.namespace}
+		storage["simple"] = &simpleStorage
+		selfLinker := &setTestSelfLinker{
+			t:           t,
+			namespace:   testCase.namespace,
+			expectedSet: testCase.selfLink,
+		}
+		var handler http.Handler
+		if testCase.legacy {
+			handler = Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+		} else {
+			handler = Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, namespaceMapper)
+		}
+		server := httptest.NewServer(handler)
+		defer server.Close()
 
-	resp, err := http.Get(server.URL + "/prefix/version/simple")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Unexpected status: %d, Expected: %d, %#v", resp.StatusCode, http.StatusOK, resp)
-	}
-	if !selfLinker.called {
-		t.Errorf("Never set self link")
+		resp, err := http.Get(server.URL + testCase.url)
+		if err != nil {
+			t.Errorf("%d: unexpected error: %v", i, err)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%d: unexpected status: %d, Expected: %d, %#v", i, resp.StatusCode, http.StatusOK, resp)
+		}
+		// TODO: future, restore get links
+		if !selfLinker.called {
+			t.Errorf("%d: never set self link", i)
+		}
+		if !simpleStorage.namespacePresent {
+			t.Errorf("%d: namespace not set", i)
+		} else if simpleStorage.actualNamespace != testCase.namespace {
+			t.Errorf("%d: unexpected resource namespace: %s", i, simpleStorage.actualNamespace)
+		}
 	}
 }
 
@@ -420,13 +462,13 @@ func TestErrorList(t *testing.T) {
 		errors: map[string]error{"list": fmt.Errorf("test Error")},
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/prefix/version/simple")
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if resp.StatusCode != http.StatusInternalServerError {
@@ -439,20 +481,19 @@ func TestNonEmptyList(t *testing.T) {
 	simpleStorage := SimpleRESTStorage{
 		list: []Simple{
 			{
-				TypeMeta:   api.TypeMeta{Kind: "Simple"},
-				ObjectMeta: api.ObjectMeta{Namespace: "other"},
+				ObjectMeta: api.ObjectMeta{Name: "something", Namespace: "other"},
 				Other:      "foo",
 			},
 		},
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/prefix/version/simple")
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -464,7 +505,7 @@ func TestNonEmptyList(t *testing.T) {
 	var listOut SimpleList
 	body, err := extractBody(resp, &listOut)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(listOut.Items) != 1 {
@@ -474,7 +515,57 @@ func TestNonEmptyList(t *testing.T) {
 	if listOut.Items[0].Other != simpleStorage.list[0].Other {
 		t.Errorf("Unexpected data: %#v, %s", listOut.Items[0], string(body))
 	}
-	expectedSelfLink := "/prefix/version/simple?namespace=other"
+	if listOut.SelfLink != "/prefix/version/simple?namespace=" {
+		t.Errorf("unexpected list self link: %#v", listOut)
+	}
+	expectedSelfLink := "/prefix/version/simple/something?namespace=other"
+	if listOut.Items[0].ObjectMeta.SelfLink != expectedSelfLink {
+		t.Errorf("Unexpected data: %#v, %s", listOut.Items[0].ObjectMeta.SelfLink, expectedSelfLink)
+	}
+}
+
+func TestSelfLinkSkipsEmptyName(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{
+		list: []Simple{
+			{
+				ObjectMeta: api.ObjectMeta{Namespace: "other"},
+				Other:      "foo",
+			},
+		},
+	}
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/prefix/version/simple")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Unexpected status: %d, Expected: %d, %#v", resp.StatusCode, http.StatusOK, resp)
+		body, _ := ioutil.ReadAll(resp.Body)
+		t.Logf("Data: %s", string(body))
+	}
+	var listOut SimpleList
+	body, err := extractBody(resp, &listOut)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(listOut.Items) != 1 {
+		t.Errorf("Unexpected response: %#v", listOut)
+		return
+	}
+	if listOut.Items[0].Other != simpleStorage.list[0].Other {
+		t.Errorf("Unexpected data: %#v, %s", listOut.Items[0], string(body))
+	}
+	if listOut.SelfLink != "/prefix/version/simple?namespace=" {
+		t.Errorf("unexpected list self link: %#v", listOut)
+	}
+	expectedSelfLink := ""
 	if listOut.Items[0].ObjectMeta.SelfLink != expectedSelfLink {
 		t.Errorf("Unexpected data: %#v, %s", listOut.Items[0].ObjectMeta.SelfLink, expectedSelfLink)
 	}
@@ -489,14 +580,22 @@ func TestGet(t *testing.T) {
 	}
 	selfLinker := &setTestSelfLinker{
 		t:           t,
-		expectedSet: "/prefix/version/simple/id",
+		expectedSet: "/prefix/version/simple/id?namespace=default",
+		name:        "id",
+		namespace:   "default",
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/prefix/version/simple/id")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
 	var itemOut Simple
 	body, err := extractBody(resp, &itemOut)
 	if err != nil {
@@ -511,13 +610,88 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestGetAlternateSelfLink(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{
+		item: Simple{
+			Other: "foo",
+		},
+	}
+	selfLinker := &setTestSelfLinker{
+		t:           t,
+		expectedSet: "/prefix/version/simple/id?namespace=test",
+		name:        "id",
+		namespace:   "test",
+	}
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, legacyNamespaceMapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/prefix/version/simple/id?namespace=test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	var itemOut Simple
+	body, err := extractBody(resp, &itemOut)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if itemOut.Name != simpleStorage.item.Name {
+		t.Errorf("Unexpected data: %#v, expected %#v (%s)", itemOut, simpleStorage.item, string(body))
+	}
+	if !selfLinker.called {
+		t.Errorf("Never set self link")
+	}
+}
+
+func TestGetNamespaceSelfLink(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{
+		item: Simple{
+			Other: "foo",
+		},
+	}
+	selfLinker := &setTestSelfLinker{
+		t:           t,
+		expectedSet: "/prefix/version/namespaces/foo/simple/id",
+		name:        "id",
+		namespace:   "foo",
+	}
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, namespaceMapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/prefix/version/namespaces/foo/simple/id")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	var itemOut Simple
+	body, err := extractBody(resp, &itemOut)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if itemOut.Name != simpleStorage.item.Name {
+		t.Errorf("Unexpected data: %#v, expected %#v (%s)", itemOut, simpleStorage.item, string(body))
+	}
+	if !selfLinker.called {
+		t.Errorf("Never set self link")
+	}
+}
 func TestGetMissing(t *testing.T) {
 	storage := map[string]RESTStorage{}
 	simpleStorage := SimpleRESTStorage{
 		errors: map[string]error{"get": apierrs.NewNotFound("simple", "id")},
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -536,17 +710,19 @@ func TestDelete(t *testing.T) {
 	simpleStorage := SimpleRESTStorage{}
 	ID := "id"
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	client := http.Client{}
 	request, err := http.NewRequest("DELETE", server.URL+"/prefix/version/simple/"+ID, nil)
-	_, err = client.Do(request)
+	res, err := client.Do(request)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("unexpected response: %#v", res)
+	}
 	if simpleStorage.deleted != ID {
 		t.Errorf("Unexpected delete: %s, expected %s", simpleStorage.deleted, ID)
 	}
@@ -557,7 +733,7 @@ func TestDeleteInvokesAdmissionControl(t *testing.T) {
 	simpleStorage := SimpleRESTStorage{}
 	ID := "id"
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -579,7 +755,7 @@ func TestDeleteMissing(t *testing.T) {
 		errors: map[string]error{"delete": apierrs.NewNotFound("simple", ID)},
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -602,13 +778,19 @@ func TestUpdate(t *testing.T) {
 	storage["simple"] = &simpleStorage
 	selfLinker := &setTestSelfLinker{
 		t:           t,
-		expectedSet: "/prefix/version/simple/" + ID,
+		expectedSet: "/prefix/version/simple/" + ID + "?namespace=default",
+		name:        ID,
+		namespace:   api.NamespaceDefault,
 	}
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name:      ID,
+			Namespace: "", // update should allow the client to send an empty namespace
+		},
 		Other: "bar",
 	}
 	body, err := codec.Encode(item)
@@ -637,15 +819,15 @@ func TestUpdateInvokesAdmissionControl(t *testing.T) {
 	simpleStorage := SimpleRESTStorage{}
 	ID := "id"
 	storage["simple"] = &simpleStorage
-	selfLinker := &setTestSelfLinker{
-		t:           t,
-		expectedSet: "/prefix/version/simple/" + ID,
-	}
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name:      ID,
+			Namespace: api.NamespaceDefault,
+		},
 		Other: "bar",
 	}
 	body, err := codec.Encode(item)
@@ -665,6 +847,142 @@ func TestUpdateInvokesAdmissionControl(t *testing.T) {
 	}
 }
 
+func TestUpdateRequiresMatchingName(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{}
+	ID := "id"
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	item := &Simple{
+		Other: "bar",
+	}
+	body, err := codec.Encode(item)
+	if err != nil {
+		// The following cases will fail, so die now
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	client := http.Client{}
+	request, err := http.NewRequest("PUT", server.URL+"/prefix/version/simple/"+ID, bytes.NewReader(body))
+	response, err := client.Do(request)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Errorf("Unexpected response %#v", response)
+	}
+}
+
+func TestUpdateAllowsMissingNamespace(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{}
+	ID := "id"
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name: ID,
+		},
+		Other: "bar",
+	}
+	body, err := codec.Encode(item)
+	if err != nil {
+		// The following cases will fail, so die now
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	client := http.Client{}
+	request, err := http.NewRequest("PUT", server.URL+"/prefix/version/simple/"+ID, bytes.NewReader(body))
+	response, err := client.Do(request)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("Unexpected response %#v", response)
+	}
+}
+
+// when the object name and namespace can't be retrieved, skip name checking
+func TestUpdateAllowsMismatchedNamespaceOnError(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{}
+	ID := "id"
+	storage["simple"] = &simpleStorage
+	selfLinker := &setTestSelfLinker{
+		t:   t,
+		err: fmt.Errorf("test error"),
+	}
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name:      ID,
+			Namespace: "other", // does not match request
+		},
+		Other: "bar",
+	}
+	body, err := codec.Encode(item)
+	if err != nil {
+		// The following cases will fail, so die now
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	client := http.Client{}
+	request, err := http.NewRequest("PUT", server.URL+"/prefix/version/simple/"+ID, bytes.NewReader(body))
+	_, err = client.Do(request)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if simpleStorage.updated == nil || simpleStorage.updated.Name != item.Name {
+		t.Errorf("Unexpected update value %#v, expected %#v.", simpleStorage.updated, item)
+	}
+	if selfLinker.called {
+		t.Errorf("self link ignored")
+	}
+}
+
+func TestUpdatePreventsMismatchedNamespace(t *testing.T) {
+	storage := map[string]RESTStorage{}
+	simpleStorage := SimpleRESTStorage{}
+	ID := "id"
+	storage["simple"] = &simpleStorage
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name:      ID,
+			Namespace: "other",
+		},
+		Other: "bar",
+	}
+	body, err := codec.Encode(item)
+	if err != nil {
+		// The following cases will fail, so die now
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	client := http.Client{}
+	request, err := http.NewRequest("PUT", server.URL+"/prefix/version/simple/"+ID, bytes.NewReader(body))
+	response, err := client.Do(request)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Errorf("Unexpected response %#v", response)
+	}
+}
+
 func TestUpdateMissing(t *testing.T) {
 	storage := map[string]RESTStorage{}
 	ID := "id"
@@ -672,11 +990,15 @@ func TestUpdateMissing(t *testing.T) {
 		errors: map[string]error{"update": apierrs.NewNotFound("simple", ID)},
 	}
 	storage["simple"] = &simpleStorage
-	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(storage, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	item := &Simple{
+		ObjectMeta: api.ObjectMeta{
+			Name:      ID,
+			Namespace: api.NamespaceDefault,
+		},
 		Other: "bar",
 	}
 	body, err := codec.Encode(item)
@@ -690,7 +1012,6 @@ func TestUpdateMissing(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-
 	if response.StatusCode != http.StatusNotFound {
 		t.Errorf("Unexpected response %#v", response)
 	}
@@ -703,7 +1024,7 @@ func TestCreateNotFound(t *testing.T) {
 			// See https://github.com/GoogleCloudPlatform/kubernetes/pull/486#discussion_r15037092.
 			errors: map[string]error{"create": apierrs.NewNotFound("simple", "id")},
 		},
-	}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -743,20 +1064,79 @@ type setTestSelfLinker struct {
 	name        string
 	namespace   string
 	called      bool
+	err         error
 }
 
-func (s *setTestSelfLinker) Namespace(runtime.Object) (string, error) { return s.namespace, nil }
-func (s *setTestSelfLinker) Name(runtime.Object) (string, error)      { return s.name, nil }
-func (*setTestSelfLinker) SelfLink(runtime.Object) (string, error)    { return "", nil }
+func (s *setTestSelfLinker) Namespace(runtime.Object) (string, error) { return s.namespace, s.err }
+func (s *setTestSelfLinker) Name(runtime.Object) (string, error)      { return s.name, s.err }
+func (s *setTestSelfLinker) SelfLink(runtime.Object) (string, error)  { return "", s.err }
 func (s *setTestSelfLinker) SetSelfLink(obj runtime.Object, selfLink string) error {
 	if e, a := s.expectedSet, selfLink; e != a {
 		s.t.Errorf("expected '%v', got '%v'", e, a)
 	}
 	s.called = true
-	return nil
+	return s.err
 }
 
 func TestCreate(t *testing.T) {
+	storage := SimpleRESTStorage{
+		injectedFunction: func(obj runtime.Object) (runtime.Object, error) {
+			time.Sleep(5 * time.Millisecond)
+			return obj, nil
+		},
+	}
+	selfLinker := &setTestSelfLinker{
+		t:           t,
+		name:        "bar",
+		namespace:   "default",
+		expectedSet: "/prefix/version/foo/bar?namespace=default",
+	}
+	handler := Handle(map[string]RESTStorage{
+		"foo": &storage,
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := http.Client{}
+
+	simple := &Simple{
+		Other: "bar",
+	}
+	data, _ := codec.Encode(simple)
+	request, err := http.NewRequest("POST", server.URL+"/prefix/version/foo", bytes.NewBuffer(data))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	var response *http.Response
+	go func() {
+		response, err = client.Do(request)
+		wg.Done()
+	}()
+	wg.Wait()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	var itemOut Simple
+	body, err := extractBody(response, &itemOut)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if !reflect.DeepEqual(&itemOut, simple) {
+		t.Errorf("Unexpected data: %#v, expected %#v (%s)", itemOut, simple, string(body))
+	}
+	if response.StatusCode != http.StatusCreated {
+		t.Errorf("Unexpected status: %d, Expected: %d, %#v", response.StatusCode, http.StatusOK, response)
+	}
+	if !selfLinker.called {
+		t.Errorf("Never set self link")
+	}
+}
+
+func TestCreateInNamespace(t *testing.T) {
 	storage := SimpleRESTStorage{
 		injectedFunction: func(obj runtime.Object) (runtime.Object, error) {
 			time.Sleep(5 * time.Millisecond)
@@ -771,7 +1151,7 @@ func TestCreate(t *testing.T) {
 	}
 	handler := Handle(map[string]RESTStorage{
 		"foo": &storage,
-	}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -806,7 +1186,7 @@ func TestCreate(t *testing.T) {
 	if !reflect.DeepEqual(&itemOut, simple) {
 		t.Errorf("Unexpected data: %#v, expected %#v (%s)", itemOut, simple, string(body))
 	}
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusCreated {
 		t.Errorf("Unexpected status: %d, Expected: %d, %#v", response.StatusCode, http.StatusOK, response)
 	}
 	if !selfLinker.called {
@@ -829,7 +1209,7 @@ func TestCreateInvokesAdmissionControl(t *testing.T) {
 	}
 	handler := Handle(map[string]RESTStorage{
 		"foo": &storage,
-	}, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), mapper)
+	}, codec, "/prefix", testVersion, selfLinker, deny.NewAlwaysDeny(), requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
@@ -889,7 +1269,7 @@ func TestDelayReturnsError(t *testing.T) {
 			return nil, apierrs.NewAlreadyExists("foo", "bar")
 		},
 	}
-	handler := Handle(map[string]RESTStorage{"foo": &storage}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	handler := Handle(map[string]RESTStorage{"foo": &storage}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -955,13 +1335,13 @@ func TestCreateTimeout(t *testing.T) {
 	}
 	handler := Handle(map[string]RESTStorage{
 		"foo": &storage,
-	}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper)
+	}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	simple := &Simple{Other: "foo"}
 	data, _ := codec.Encode(simple)
-	itemOut := expectApiStatus(t, "POST", server.URL+"/prefix/version/foo?timeout=4ms", data, http.StatusAccepted)
+	itemOut := expectApiStatus(t, "POST", server.URL+"/prefix/version/foo?timeout=4ms", data, apierrs.StatusServerTimeout)
 	if itemOut.Status != api.StatusFailure || itemOut.Reason != api.StatusReasonTimeout {
 		t.Errorf("Unexpected status %#v", itemOut)
 	}
@@ -987,7 +1367,7 @@ func TestCORSAllowedOrigins(t *testing.T) {
 		}
 
 		handler := CORS(
-			Handle(map[string]RESTStorage{}, codec, "/prefix", testVersion, selfLinker, admissionControl, mapper),
+			Handle(map[string]RESTStorage{}, codec, "/prefix", testVersion, selfLinker, admissionControl, requestContextMapper, mapper),
 			allowedOriginRegexps, nil, nil, "true",
 		)
 		server := httptest.NewServer(handler)

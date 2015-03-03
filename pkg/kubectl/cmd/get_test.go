@@ -34,7 +34,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch/json"
 )
 
-func testData() (*api.PodList, *api.ServiceList) {
+func testData() (*api.PodList, *api.ServiceList, *api.ReplicationControllerList) {
 	pods := &api.PodList{
 		ListMeta: api.ListMeta{
 			ResourceVersion: "15",
@@ -70,7 +70,20 @@ func testData() (*api.PodList, *api.ServiceList) {
 			},
 		},
 	}
-	return pods, svc
+	rc := &api.ReplicationControllerList{
+		ListMeta: api.ListMeta{
+			ResourceVersion: "17",
+		},
+		Items: []api.ReplicationController{
+			{
+				ObjectMeta: api.ObjectMeta{Name: "rc1", Namespace: "test", ResourceVersion: "18"},
+				Spec: api.ReplicationControllerSpec{
+					Replicas: 1,
+				},
+			},
+		},
+	}
+	return pods, svc, rc
 }
 
 // Verifies that schemas that are not in the master tree of Kubernetes can be retrieved via Get.
@@ -123,7 +136,7 @@ func TestGetSchemaObject(t *testing.T) {
 }
 
 func TestGetObjects(t *testing.T) {
-	pods, _ := testData()
+	pods, _, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -149,7 +162,7 @@ func TestGetObjects(t *testing.T) {
 }
 
 func TestGetListObjects(t *testing.T) {
-	pods, _ := testData()
+	pods, _, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -175,7 +188,7 @@ func TestGetListObjects(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjects(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -183,9 +196,9 @@ func TestGetMultipleTypeObjects(t *testing.T) {
 		Codec: codec,
 		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.Path {
-			case "/ns/test/pods":
+			case "/namespaces/test/pods":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, pods)}, nil
-			case "/ns/test/services":
+			case "/namespaces/test/services":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, svc)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
@@ -211,7 +224,7 @@ func TestGetMultipleTypeObjects(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjectsAsList(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -219,9 +232,9 @@ func TestGetMultipleTypeObjectsAsList(t *testing.T) {
 		Codec: codec,
 		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.Path {
-			case "/ns/test/pods":
+			case "/namespaces/test/pods":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, pods)}, nil
-			case "/ns/test/services":
+			case "/namespaces/test/services":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, svc)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
@@ -260,7 +273,7 @@ func TestGetMultipleTypeObjectsAsList(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjectsWithSelector(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -271,9 +284,9 @@ func TestGetMultipleTypeObjectsWithSelector(t *testing.T) {
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 			}
 			switch req.URL.Path {
-			case "/ns/test/pods":
+			case "/namespaces/test/pods":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, pods)}, nil
-			case "/ns/test/services":
+			case "/namespaces/test/services":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, svc)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
@@ -359,9 +372,9 @@ func TestWatchSelector(t *testing.T) {
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 			}
 			switch req.URL.Path {
-			case "/ns/test/pods":
+			case "/namespaces/test/pods":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, &api.PodList{Items: pods})}, nil
-			case "/watch/ns/test/pods":
+			case "/watch/namespaces/test/pods":
 				return &http.Response{StatusCode: 200, Body: watchBody(codec, events)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
@@ -398,9 +411,9 @@ func TestWatchResource(t *testing.T) {
 		Codec: codec,
 		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.Path {
-			case "/ns/test/pods/foo":
+			case "/namespaces/test/pods/foo":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, &pods[0])}, nil
-			case "/watch/ns/test/pods/foo":
+			case "/watch/namespaces/test/pods/foo":
 				return &http.Response{StatusCode: 200, Body: watchBody(codec, events)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
@@ -436,9 +449,9 @@ func TestWatchOnlyResource(t *testing.T) {
 		Codec: codec,
 		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.Path {
-			case "/ns/test/pods/foo":
+			case "/namespaces/test/pods/foo":
 				return &http.Response{StatusCode: 200, Body: objBody(codec, &pods[0])}, nil
-			case "/watch/ns/test/pods/foo":
+			case "/watch/namespaces/test/pods/foo":
 				return &http.Response{StatusCode: 200, Body: watchBody(codec, events)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)

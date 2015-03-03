@@ -18,14 +18,17 @@ limitations under the License.
 // Expects an etcd server is available, or on the path somewhere.
 // Does *not* currently setup the Kubernetes network model, that must be done ahead of time.
 // TODO: Setup the k8s network bridge as part of setup.
+// TODO: combine this with the hypercube thingy.
 package main
 
 import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
+	kubeletapp "github.com/GoogleCloudPlatform/kubernetes/cmd/kubelet/app"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
@@ -34,7 +37,6 @@ import (
 	nodeControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
-	kubeletServer "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/server"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/service"
@@ -123,8 +125,9 @@ func runControllerManager(machineList []string, cl *client.Client, nodeMilliCPU,
 		},
 	}
 	kubeClient := &client.HTTPKubeletClient{Client: http.DefaultClient, Port: ports.KubeletPort}
-	nodeController := nodeControllerPkg.NewNodeController(nil, "", machineList, nodeResources, cl, kubeClient)
-	nodeController.Run(10*time.Second, 10, true)
+
+	nodeController := nodeControllerPkg.NewNodeController(nil, "", machineList, nodeResources, cl, kubeClient, 10, 5*time.Minute)
+	nodeController.Run(10*time.Second, true, true)
 
 	endpoints := service.NewEndpointController(cl)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
@@ -141,7 +144,7 @@ func startComponents(etcdClient tools.EtcdClient, cl *client.Client, addr net.IP
 	runControllerManager(machineList, cl, *nodeMilliCPU, *nodeMemory)
 
 	dockerClient := dockertools.ConnectToDockerOrDie(*dockerEndpoint)
-	kubeletServer.SimpleRunKubelet(cl, nil, dockerClient, machineList[0], "/tmp/kubernetes", "", "127.0.0.1", 10250, *masterServiceNamespace, kubeletServer.ProbeVolumePlugins())
+	kubeletapp.SimpleRunKubelet(cl, nil, dockerClient, machineList[0], "/tmp/kubernetes", "", "127.0.0.1", 10250, *masterServiceNamespace, kubeletapp.ProbeVolumePlugins())
 }
 
 func newApiClient(addr net.IP, port int) *client.Client {
@@ -151,6 +154,8 @@ func newApiClient(addr net.IP, port int) *client.Client {
 }
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	util.InitFlags()
 	util.InitLogs()
 	defer util.FlushLogs()

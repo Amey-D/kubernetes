@@ -22,6 +22,7 @@ set -o pipefail
 DOCKER_OPTS=${DOCKER_OPTS:-""}
 DOCKER_NATIVE=${DOCKER_NATIVE:-""}
 DOCKER=(docker ${DOCKER_OPTS})
+DOCKER_HOST=${DOCKER_HOST:-""}
 
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
 cd "${KUBE_ROOT}"
@@ -131,6 +132,10 @@ function kube::build::verify_prereqs() {
           # Reach over and set the clock. After sleep/resume the clock will skew.
           echo "+++ Setting boot2docker clock"
           boot2docker ssh sudo date -u -D "%Y%m%d%H%M.%S" --set "$(date -u +%Y%m%d%H%M.%S)" >/dev/null
+          if [[ -z "$DOCKER_HOST" ]]; then
+            echo "+++ Setting boot2docker env variables"
+            $(boot2docker shellinit)
+          fi
         fi
       fi
     fi
@@ -150,6 +155,20 @@ function kube::build::verify_prereqs() {
       } >&2
       exit 1
     fi
+  else
+
+    # On OS X, set boot2docker env vars for the 'clean' target if boot2docker is running
+    if kube::build::is_osx && kube::build::has_docker ; then
+      if [[ ! -z "$(which boot2docker)" ]]; then
+        if [[ $(boot2docker status) == "running" ]]; then
+          if [[ -z "$DOCKER_HOST" ]]; then
+            echo "+++ Setting boot2docker env variables"
+            $(boot2docker shellinit)
+          fi
+        fi
+      fi
+    fi
+
   fi
 
   KUBE_ROOT_HASH=$(kube::build::short_hash "$KUBE_ROOT")
@@ -478,7 +497,6 @@ function kube::release::package_tarballs() {
   # Clean out any old releases
   rm -rf "${RELEASE_DIR}"
   mkdir -p "${RELEASE_DIR}"
-  
   kube::release::package_client_tarballs
   kube::release::package_server_tarballs
   kube::release::package_salt_tarball
@@ -489,7 +507,7 @@ function kube::release::package_tarballs() {
 # Package up all of the cross compiled clients.  Over time this should grow into
 # a full SDK
 function kube::release::package_client_tarballs() {
-   # Find all of the built kubecfg binaries
+   # Find all of the built client binaries
   local platform platforms
   platforms=($(cd "${LOCAL_OUTPUT_BINPATH}" ; echo */*))
   for platform in "${platforms[@]}" ; do

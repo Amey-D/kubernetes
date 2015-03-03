@@ -18,6 +18,7 @@ package v1beta2
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 
 	newer "github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -341,6 +342,9 @@ func init() {
 			if err := s.Convert(&in.LivenessProbe, &out.LivenessProbe, 0); err != nil {
 				return err
 			}
+			if err := s.Convert(&in.ReadinessProbe, &out.ReadinessProbe, 0); err != nil {
+				return err
+			}
 			if err := s.Convert(&in.Lifecycle, &out.Lifecycle, 0); err != nil {
 				return err
 			}
@@ -423,6 +427,9 @@ func init() {
 			if err := s.Convert(&in.LivenessProbe, &out.LivenessProbe, 0); err != nil {
 				return err
 			}
+			if err := s.Convert(&in.ReadinessProbe, &out.ReadinessProbe, 0); err != nil {
+				return err
+			}
 			if err := s.Convert(&in.Lifecycle, &out.Lifecycle, 0); err != nil {
 				return err
 			}
@@ -475,6 +482,9 @@ func init() {
 			if err := s.Convert(&in.Info, &out.Info, 0); err != nil {
 				return err
 			}
+			if err := s.Convert(&in.Conditions, &out.Conditions, 0); err != nil {
+				return err
+			}
 			out.Message = in.Message
 			out.Host = in.Host
 			out.HostIP = in.HostIP
@@ -486,6 +496,9 @@ func init() {
 				return err
 			}
 			if err := s.Convert(&in.Info, &out.Info, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Conditions, &out.Conditions, 0); err != nil {
 				return err
 			}
 			out.Message = in.Message
@@ -605,6 +618,8 @@ func init() {
 			}
 
 			out.HostIP = in.Status.HostIP
+			out.PodCIDR = in.Spec.PodCIDR
+			out.ExternalID = in.Spec.ExternalID
 			return s.Convert(&in.Spec.Capacity, &out.NodeResources.Capacity, 0)
 		},
 		func(in *Minion, out *newer.Node, s conversion.Scope) error {
@@ -625,6 +640,8 @@ func init() {
 			}
 
 			out.Status.HostIP = in.HostIP
+			out.Spec.PodCIDR = in.PodCIDR
+			out.Spec.ExternalID = in.ExternalID
 			return s.Convert(&in.NodeResources.Capacity, &out.Spec.Capacity, 0)
 		},
 		func(in *newer.LimitRange, out *LimitRange, s conversion.Scope) error {
@@ -647,6 +664,21 @@ func init() {
 				return err
 			}
 			if err := s.Convert(&in.Spec, &out.Spec, 0); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(in *Namespace, out *newer.Namespace, s conversion.Scope) error {
+			if err := s.Convert(&in.TypeMeta, &out.TypeMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.TypeMeta, &out.ObjectMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Spec, &out.Spec, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Labels, &out.ObjectMeta.Labels, 0); err != nil {
 				return err
 			}
 			return nil
@@ -916,6 +948,9 @@ func init() {
 			if err := s.Convert(&in.HostPath, &out.HostDir, 0); err != nil {
 				return err
 			}
+			if err := s.Convert(&in.Secret, &out.Secret, 0); err != nil {
+				return err
+			}
 			return nil
 		},
 		func(in *VolumeSource, out *newer.VolumeSource, s conversion.Scope) error {
@@ -929,6 +964,9 @@ func init() {
 				return err
 			}
 			if err := s.Convert(&in.HostDir, &out.HostPath, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Secret, &out.Secret, 0); err != nil {
 				return err
 			}
 			return nil
@@ -995,7 +1033,197 @@ func init() {
 			out.TimeoutSeconds = in.TimeoutSeconds
 			return nil
 		},
+		func(in *newer.Endpoints, out *Endpoints, s conversion.Scope) error {
+			if err := s.Convert(&in.TypeMeta, &out.TypeMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.ObjectMeta, &out.TypeMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Protocol, &out.Protocol, 0); err != nil {
+				return err
+			}
+			for i := range in.Endpoints {
+				ep := &in.Endpoints[i]
+				out.Endpoints = append(out.Endpoints, net.JoinHostPort(ep.IP, strconv.Itoa(ep.Port)))
+			}
+			return nil
+		},
+		func(in *Endpoints, out *newer.Endpoints, s conversion.Scope) error {
+			if err := s.Convert(&in.TypeMeta, &out.TypeMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.TypeMeta, &out.ObjectMeta, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Protocol, &out.Protocol, 0); err != nil {
+				return err
+			}
+			for i := range in.Endpoints {
+				out.Endpoints = append(out.Endpoints, newer.Endpoint{})
+				ep := &out.Endpoints[i]
+				host, port, err := net.SplitHostPort(in.Endpoints[i])
+				if err != nil {
+					return err
+				}
+				ep.IP = host
+				pn, err := strconv.Atoi(port)
+				if err != nil {
+					return err
+				}
+				ep.Port = pn
+			}
+			return nil
+		},
+
+		func(in *newer.NodeCondition, out *NodeCondition, s conversion.Scope) error {
+			if err := s.Convert(&in.Type, &out.Kind, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Status, &out.Status, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.LastProbeTime, &out.LastProbeTime, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.LastTransitionTime, &out.LastTransitionTime, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Reason, &out.Reason, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Message, &out.Message, 0); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(in *NodeCondition, out *newer.NodeCondition, s conversion.Scope) error {
+			if err := s.Convert(&in.Kind, &out.Type, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Status, &out.Status, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.LastProbeTime, &out.LastProbeTime, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.LastTransitionTime, &out.LastTransitionTime, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Reason, &out.Reason, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Message, &out.Message, 0); err != nil {
+				return err
+			}
+			return nil
+		},
+
+		func(in *newer.NodeConditionType, out *NodeConditionKind, s conversion.Scope) error {
+			switch *in {
+			case newer.NodeReachable:
+				*out = NodeReachable
+				break
+			case newer.NodeReady:
+				*out = NodeReady
+				break
+			case "":
+				*out = ""
+			default:
+				*out = NodeConditionKind(*in)
+				break
+			}
+
+			return nil
+		},
+		func(in *NodeConditionKind, out *newer.NodeConditionType, s conversion.Scope) error {
+			switch *in {
+			case NodeReachable:
+				*out = newer.NodeReachable
+				break
+			case NodeReady:
+				*out = newer.NodeReady
+				break
+			case "":
+				*out = ""
+			default:
+				*out = newer.NodeConditionType(*in)
+				break
+			}
+
+			return nil
+		},
+
+		func(in *newer.PodCondition, out *PodCondition, s conversion.Scope) error {
+			if err := s.Convert(&in.Type, &out.Kind, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Status, &out.Status, 0); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(in *PodCondition, out *newer.PodCondition, s conversion.Scope) error {
+			if err := s.Convert(&in.Kind, &out.Type, 0); err != nil {
+				return err
+			}
+			if err := s.Convert(&in.Status, &out.Status, 0); err != nil {
+				return err
+			}
+			return nil
+		},
+
+		func(in *newer.PodConditionType, out *PodConditionKind, s conversion.Scope) error {
+			switch *in {
+			case newer.PodReady:
+				*out = PodReady
+				break
+			case "":
+				*out = ""
+			default:
+				*out = PodConditionKind(*in)
+				break
+			}
+
+			return nil
+		},
+		func(in *PodConditionKind, out *newer.PodConditionType, s conversion.Scope) error {
+			switch *in {
+			case PodReady:
+				*out = newer.PodReady
+				break
+			case "":
+				*out = ""
+			default:
+				*out = newer.PodConditionType(*in)
+				break
+			}
+
+			return nil
+		},
 	)
+	if err != nil {
+		// If one of the conversion functions is malformed, detect it immediately.
+		panic(err)
+	}
+
+	// Add field conversion funcs.
+	err = newer.Scheme.AddFieldLabelConversionFunc("v1beta2", "pods",
+		func(label, value string) (string, string, error) {
+			switch label {
+			case "name":
+				return "name", value, nil
+			case "DesiredState.Host":
+				return "Status.Host", value, nil
+			case "DesiredState.Status":
+				podStatus := PodStatus(value)
+				var internalValue newer.PodPhase
+				newer.Scheme.Convert(&podStatus, &internalValue)
+				return "Status.Phase", string(internalValue), nil
+			default:
+				return "", "", fmt.Errorf("field label not supported: %s", label)
+			}
+		})
 	if err != nil {
 		// If one of the conversion functions is malformed, detect it immediately.
 		panic(err)

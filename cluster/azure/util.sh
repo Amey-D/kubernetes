@@ -343,6 +343,7 @@ function kube-up {
         echo "mkdir -p /var/cache/kubernetes-install"
         echo "cd /var/cache/kubernetes-install"
         echo "readonly MASTER_NAME='${MASTER_NAME}'"
+        echo "readonly INSTANCE_PREFIX='${INSTANCE_PREFIX}'"
         echo "readonly NODE_INSTANCE_PREFIX='${INSTANCE_PREFIX}-minion'"
         echo "readonly SERVER_BINARY_TAR_URL='${SERVER_BINARY_TAR_URL}'"
         echo "readonly SALT_TAR_URL='${SALT_TAR_URL}'"
@@ -553,6 +554,11 @@ function ssh-to-node {
 # Restart the kube-proxy on a node ($1)
 function restart-kube-proxy {
     ssh-to-node "$1" "sudo /etc/init.d/kube-proxy restart"
+}
+
+# Restart the kube-proxy on the master ($1)
+function restart-apiserver {
+    ssh-to-node "$1" "sudo /etc/init.d/kube-apiserver restart"
 }
 
 # Setup monitoring using heapster and InfluxDB

@@ -18,6 +18,7 @@ package apiserver
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
@@ -28,21 +29,35 @@ import (
 type RedirectHandler struct {
 	storage                map[string]RESTStorage
 	codec                  runtime.Codec
+	context                api.RequestContextMapper
 	apiRequestInfoResolver *APIRequestInfoResolver
 }
 
 func (r *RedirectHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	var verb string
+	var apiResource string
+	var httpCode int
+	reqStart := time.Now()
+	defer monitor("redirect", verb, apiResource, httpCode, reqStart)
+
 	requestInfo, err := r.apiRequestInfoResolver.GetAPIRequestInfo(req)
 	if err != nil {
 		notFound(w, req)
+		httpCode = http.StatusNotFound
 		return
 	}
+	verb = requestInfo.Verb
 	resource, parts := requestInfo.Resource, requestInfo.Parts
-	ctx := api.WithNamespace(api.NewContext(), requestInfo.Namespace)
+	ctx, ok := r.context.Get(req)
+	if !ok {
+		ctx = api.NewContext()
+	}
+	ctx = api.WithNamespace(ctx, requestInfo.Namespace)
 
 	// redirection requires /resource/resourceName path parts
 	if len(parts) != 2 || req.Method != "GET" {
 		notFound(w, req)
+		httpCode = http.StatusNotFound
 		return
 	}
 	id := parts[1]
@@ -50,13 +65,15 @@ func (r *RedirectHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		httplog.LogOf(req, w).Addf("'%v' has no storage object", resource)
 		notFound(w, req)
+		httpCode = http.StatusNotFound
 		return
 	}
+	apiResource = resource
 
 	redirector, ok := storage.(Redirector)
 	if !ok {
 		httplog.LogOf(req, w).Addf("'%v' is not a redirector", resource)
-		errorJSON(errors.NewMethodNotSupported(resource, "redirect"), r.codec, w)
+		httpCode = errorJSON(errors.NewMethodNotSupported(resource, "redirect"), r.codec, w)
 		return
 	}
 
@@ -64,9 +81,11 @@ func (r *RedirectHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		status := errToAPIStatus(err)
 		writeJSON(status.Code, r.codec, status, w)
+		httpCode = status.Code
 		return
 	}
 
 	w.Header().Set("Location", location)
 	w.WriteHeader(http.StatusTemporaryRedirect)
+	httpCode = http.StatusTemporaryRedirect
 }

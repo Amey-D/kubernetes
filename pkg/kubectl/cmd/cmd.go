@@ -183,7 +183,7 @@ func (f *Factory) BindFlags(flags *pflag.FlagSet) {
 }
 
 // NewKubectlCommand creates the `kubectl` command and its nested children.
-func (f *Factory) NewKubectlCommand(out io.Writer) *cobra.Command {
+func (f *Factory) NewKubectlCommand(in io.Reader, out, err io.Writer) *cobra.Command {
 	// Parent command to which all subcommands are added.
 	cmds := &cobra.Command{
 		Use:   "kubectl",
@@ -211,9 +211,14 @@ Find more information at https://github.com/GoogleCloudPlatform/kubernetes.`,
 	cmds.AddCommand(f.NewCmdRollingUpdate(out))
 	cmds.AddCommand(f.NewCmdResize(out))
 
+	cmds.AddCommand(f.NewCmdExec(in, out, err))
+	cmds.AddCommand(f.NewCmdPortForward())
+
 	cmds.AddCommand(f.NewCmdRunContainer(out))
 	cmds.AddCommand(f.NewCmdStop(out))
 	cmds.AddCommand(f.NewCmdExposeService(out))
+
+	cmds.AddCommand(f.NewCmdLabel(out))
 
 	return cmds
 }
@@ -325,7 +330,7 @@ func DefaultClientConfig(flags *pflag.FlagSet) clientcmd.ClientConfig {
 
 func checkErr(err error) {
 	if err != nil {
-		glog.FatalDepth(1, err)
+		glog.FatalDepth(1, err.Error())
 	}
 }
 

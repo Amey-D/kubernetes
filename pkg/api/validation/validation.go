@@ -109,6 +109,35 @@ func ValidateNodeName(name string, prefix bool) (bool, string) {
 	return nameIsDNSSubdomain(name, prefix)
 }
 
+// ValidateNamespaceName can be used to check whether the given namespace name is valid.
+// Prefix indicates this name will be used as part of generation, in which case
+// trailing dashes are allowed.
+func ValidateNamespaceName(name string, prefix bool) (bool, string) {
+	return nameIsDNSSubdomain(name, prefix)
+}
+
+// ValidateLimitRangeName can be used to check whether the given limit range name is valid.
+// Prefix indicates this name will be used as part of generation, in which case
+// trailing dashes are allowed.
+func ValidateLimitRangeName(name string, prefix bool) (bool, string) {
+	return nameIsDNSSubdomain(name, prefix)
+}
+
+// ValidateResourceQuotaName can be used to check whether the given
+// resource quota name is valid.
+// Prefix indicates this name will be used as part of generation, in which case
+// trailing dashes are allowed.
+func ValidateResourceQuotaName(name string, prefix bool) (bool, string) {
+	return nameIsDNSSubdomain(name, prefix)
+}
+
+// ValidateSecretName can be used to check whether the given secret name is valid.
+// Prefix indicates this name will be used as part of generation, in which case
+// trailing dashes are allowed.
+func ValidateSecretName(name string, prefix bool) (bool, string) {
+	return nameIsDNSSubdomain(name, prefix)
+}
+
 // nameIsDNSSubdomain is a ValidateNameFunc for names that must be a DNS subdomain.
 func nameIsDNSSubdomain(name string, prefix bool) (bool, string) {
 	if prefix {
@@ -226,7 +255,7 @@ func validateSource(source *api.VolumeSource) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 	if source.HostPath != nil {
 		numVolumes++
-		allErrs = append(allErrs, validateHostPath(source.HostPath).Prefix("hostPath")...)
+		allErrs = append(allErrs, validateHostPathVolumeSource(source.HostPath).Prefix("hostPath")...)
 	}
 	if source.EmptyDir != nil {
 		numVolumes++
@@ -234,11 +263,15 @@ func validateSource(source *api.VolumeSource) errs.ValidationErrorList {
 	}
 	if source.GitRepo != nil {
 		numVolumes++
-		allErrs = append(allErrs, validateGitRepo(source.GitRepo).Prefix("gitRepo")...)
+		allErrs = append(allErrs, validateGitRepoVolumeSource(source.GitRepo).Prefix("gitRepo")...)
 	}
 	if source.GCEPersistentDisk != nil {
 		numVolumes++
-		allErrs = append(allErrs, validateGCEPersistentDisk(source.GCEPersistentDisk).Prefix("persistentDisk")...)
+		allErrs = append(allErrs, validateGCEPersistentDiskVolumeSource(source.GCEPersistentDisk).Prefix("persistentDisk")...)
+	}
+	if source.Secret != nil {
+		numVolumes++
+		allErrs = append(allErrs, validateSecretVolumeSource(source.Secret).Prefix("secret")...)
 	}
 	if numVolumes != 1 {
 		allErrs = append(allErrs, errs.NewFieldInvalid("", source, "exactly 1 volume type is required"))
@@ -246,7 +279,7 @@ func validateSource(source *api.VolumeSource) errs.ValidationErrorList {
 	return allErrs
 }
 
-func validateHostPath(hostDir *api.HostPath) errs.ValidationErrorList {
+func validateHostPathVolumeSource(hostDir *api.HostPathVolumeSource) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 	if hostDir.Path == "" {
 		allErrs = append(allErrs, errs.NewFieldRequired("path", hostDir.Path))
@@ -254,7 +287,7 @@ func validateHostPath(hostDir *api.HostPath) errs.ValidationErrorList {
 	return allErrs
 }
 
-func validateGitRepo(gitRepo *api.GitRepo) errs.ValidationErrorList {
+func validateGitRepoVolumeSource(gitRepo *api.GitRepoVolumeSource) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 	if gitRepo.Repository == "" {
 		allErrs = append(allErrs, errs.NewFieldRequired("repository", gitRepo.Repository))
@@ -262,7 +295,7 @@ func validateGitRepo(gitRepo *api.GitRepo) errs.ValidationErrorList {
 	return allErrs
 }
 
-func validateGCEPersistentDisk(PD *api.GCEPersistentDisk) errs.ValidationErrorList {
+func validateGCEPersistentDiskVolumeSource(PD *api.GCEPersistentDiskVolumeSource) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 	if PD.PDName == "" {
 		allErrs = append(allErrs, errs.NewFieldRequired("pdName", PD.PDName))
@@ -276,9 +309,23 @@ func validateGCEPersistentDisk(PD *api.GCEPersistentDisk) errs.ValidationErrorLi
 	return allErrs
 }
 
+func validateSecretVolumeSource(secretSource *api.SecretVolumeSource) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	if secretSource.Target.Name == "" {
+		allErrs = append(allErrs, errs.NewFieldRequired("target.name", ""))
+	}
+	if secretSource.Target.Namespace == "" {
+		allErrs = append(allErrs, errs.NewFieldRequired("target.namespace", ""))
+	}
+	if secretSource.Target.Kind != "Secret" {
+		allErrs = append(allErrs, errs.NewFieldInvalid("target.kind", secretSource.Target.Kind, "Secret"))
+	}
+	return allErrs
+}
+
 var supportedPortProtocols = util.NewStringSet(string(api.ProtocolTCP), string(api.ProtocolUDP))
 
-func validatePorts(ports []api.Port) errs.ValidationErrorList {
+func validatePorts(ports []api.ContainerPort) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 
 	allNames := util.StringSet{}
@@ -345,9 +392,25 @@ func validateVolumeMounts(mounts []api.VolumeMount, volumes util.StringSet) errs
 	return allErrs
 }
 
+func validateProbe(probe *api.Probe) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+
+	if probe == nil {
+		return allErrs
+	}
+	allErrs = append(allErrs, validateHandler(&probe.Handler)...)
+	if probe.InitialDelaySeconds < 0 {
+		allErrs = append(allErrs, errs.NewFieldInvalid("initialDelay", probe.InitialDelaySeconds, "may not be less than zero"))
+	}
+	if probe.TimeoutSeconds < 0 {
+		allErrs = append(allErrs, errs.NewFieldInvalid("timeout", probe.TimeoutSeconds, "may not be less than zero"))
+	}
+	return allErrs
+}
+
 // AccumulateUniquePorts runs an extraction function on each Port of each Container,
 // accumulating the results and returning an error if any ports conflict.
-func AccumulateUniquePorts(containers []api.Container, accumulator map[int]bool, extract func(*api.Port) int) errs.ValidationErrorList {
+func AccumulateUniquePorts(containers []api.Container, accumulator map[int]bool, extract func(*api.ContainerPort) int) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 
 	for ci, ctr := range containers {
@@ -372,7 +435,7 @@ func AccumulateUniquePorts(containers []api.Container, accumulator map[int]bool,
 // a slice of containers.
 func checkHostPortConflicts(containers []api.Container) errs.ValidationErrorList {
 	allPorts := map[int]bool{}
-	return AccumulateUniquePorts(containers, allPorts, func(p *api.Port) int { return p.HostPort })
+	return AccumulateUniquePorts(containers, allPorts, func(p *api.ContainerPort) int { return p.HostPort })
 }
 
 func validateExecAction(exec *api.ExecAction) errs.ValidationErrorList {
@@ -388,6 +451,21 @@ func validateHTTPGetAction(http *api.HTTPGetAction) errs.ValidationErrorList {
 	if len(http.Path) == 0 {
 		allErrors = append(allErrors, errs.NewFieldRequired("path", http.Path))
 	}
+	if http.Port.Kind == util.IntstrInt && !util.IsValidPortNum(http.Port.IntVal) {
+		allErrors = append(allErrors, errs.NewFieldInvalid("port", http.Port, portRangeErrorMsg))
+	} else if http.Port.Kind == util.IntstrString && len(http.Port.StrVal) == 0 {
+		allErrors = append(allErrors, errs.NewFieldRequired("port", http.Port.StrVal))
+	}
+	return allErrors
+}
+
+func validateTCPSocketAction(tcp *api.TCPSocketAction) errs.ValidationErrorList {
+	allErrors := errs.ValidationErrorList{}
+	if tcp.Port.Kind == util.IntstrInt && !util.IsValidPortNum(tcp.Port.IntVal) {
+		allErrors = append(allErrors, errs.NewFieldInvalid("port", tcp.Port, portRangeErrorMsg))
+	} else if tcp.Port.Kind == util.IntstrString && len(tcp.Port.StrVal) == 0 {
+		allErrors = append(allErrors, errs.NewFieldRequired("port", tcp.Port.StrVal))
+	}
 	return allErrors
 }
 
@@ -401,6 +479,10 @@ func validateHandler(handler *api.Handler) errs.ValidationErrorList {
 	if handler.HTTPGet != nil {
 		numHandlers++
 		allErrors = append(allErrors, validateHTTPGetAction(handler.HTTPGet).Prefix("httpGet")...)
+	}
+	if handler.TCPSocket != nil {
+		numHandlers++
+		allErrors = append(allErrors, validateTCPSocketAction(handler.TCPSocket).Prefix("tcpSocket")...)
 	}
 	if numHandlers != 1 {
 		allErrors = append(allErrors, errs.NewFieldInvalid("", handler, "exactly 1 handler type is required"))
@@ -458,6 +540,8 @@ func validateContainers(containers []api.Container, volumes util.StringSet) errs
 		if ctr.Lifecycle != nil {
 			cErrs = append(cErrs, validateLifecycle(ctr.Lifecycle).Prefix("lifecycle")...)
 		}
+		cErrs = append(cErrs, validateProbe(ctr.LivenessProbe).Prefix("livenessProbe")...)
+		cErrs = append(cErrs, validateProbe(ctr.ReadinessProbe).Prefix("readinessProbe")...)
 		cErrs = append(cErrs, validatePorts(ctr.Ports).Prefix("ports")...)
 		cErrs = append(cErrs, validateEnv(ctr.Env).Prefix("env")...)
 		cErrs = append(cErrs, validateVolumeMounts(ctr.VolumeMounts, volumes).Prefix("volumeMounts")...)
@@ -554,7 +638,8 @@ func ValidatePodSpec(spec *api.PodSpec) errs.ValidationErrorList {
 	return allErrs
 }
 
-// ValidatePodUpdate tests to see if the update is legal
+// ValidatePodUpdate tests to see if the update is legal for an end user to make. newPod is updated with fields
+// that cannot be changed.
 func ValidatePodUpdate(newPod, oldPod *api.Pod) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 
@@ -577,6 +662,7 @@ func ValidatePodUpdate(newPod, oldPod *api.Pod) errs.ValidationErrorList {
 		allErrs = append(allErrs, errs.NewFieldInvalid("spec.containers", newPod.Spec.Containers, "some fields are immutable"))
 	}
 
+	newPod.Status = oldPod.Status
 	return allErrs
 }
 
@@ -594,6 +680,11 @@ func ValidateService(service *api.Service) errs.ValidationErrorList {
 		allErrs = append(allErrs, errs.NewFieldRequired("spec.protocol", service.Spec.Protocol))
 	} else if !supportedPortProtocols.Has(strings.ToUpper(string(service.Spec.Protocol))) {
 		allErrs = append(allErrs, errs.NewFieldNotSupported("spec.protocol", service.Spec.Protocol))
+	}
+	if service.Spec.ContainerPort.Kind == util.IntstrInt && service.Spec.ContainerPort.IntVal != 0 && !util.IsValidPortNum(service.Spec.ContainerPort.IntVal) {
+		allErrs = append(allErrs, errs.NewFieldInvalid("spec.containerPort", service.Spec.Port, portRangeErrorMsg))
+	} else if service.Spec.ContainerPort.Kind == util.IntstrString && len(service.Spec.ContainerPort.StrVal) == 0 {
+		allErrs = append(allErrs, errs.NewFieldRequired("spec.containerPort", service.Spec.ContainerPort.StrVal))
 	}
 
 	if service.Spec.Selector != nil {
@@ -770,16 +861,8 @@ func validateResourceName(value string, field string) errs.ValidationErrorList {
 // ValidateLimitRange tests if required fields in the LimitRange are set.
 func ValidateLimitRange(limitRange *api.LimitRange) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
-	if len(limitRange.Name) == 0 {
-		allErrs = append(allErrs, errs.NewFieldRequired("name", limitRange.Name))
-	} else if !util.IsDNSSubdomain(limitRange.Name) {
-		allErrs = append(allErrs, errs.NewFieldInvalid("name", limitRange.Name, dnsSubdomainErrorMsg))
-	}
-	if len(limitRange.Namespace) == 0 {
-		allErrs = append(allErrs, errs.NewFieldRequired("namespace", limitRange.Namespace))
-	} else if !util.IsDNSSubdomain(limitRange.Namespace) {
-		allErrs = append(allErrs, errs.NewFieldInvalid("namespace", limitRange.Namespace, dnsSubdomainErrorMsg))
-	}
+	allErrs = append(allErrs, ValidateObjectMeta(&limitRange.ObjectMeta, true, ValidateLimitRangeName).Prefix("metadata")...)
+
 	// ensure resource names are properly qualified per docs/resources.md
 	for i := range limitRange.Spec.Limits {
 		limit := limitRange.Spec.Limits[i]
@@ -790,6 +873,27 @@ func ValidateLimitRange(limitRange *api.LimitRange) errs.ValidationErrorList {
 			allErrs = append(allErrs, validateResourceName(string(k), fmt.Sprintf("spec.limits[%d].min[%s]", i, k))...)
 		}
 	}
+	return allErrs
+}
+
+// ValidateSecret tests if required fields in the Secret are set.
+func ValidateSecret(secret *api.Secret) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, ValidateObjectMeta(&secret.ObjectMeta, true, ValidateSecretName).Prefix("metadata")...)
+
+	totalSize := 0
+	for key, value := range secret.Data {
+		if !util.IsDNSSubdomain(key) {
+			allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("data[%s]", key), key, cIdentifierErrorMsg))
+		}
+
+		totalSize += len(value)
+	}
+
+	if totalSize > api.MaxSecretSize {
+		allErrs = append(allErrs, errs.NewFieldForbidden("data", "Maximum secret size exceeded"))
+	}
+
 	return allErrs
 }
 
@@ -818,16 +922,8 @@ func validateResourceRequirements(container *api.Container) errs.ValidationError
 // ValidateResourceQuota tests if required fields in the ResourceQuota are set.
 func ValidateResourceQuota(resourceQuota *api.ResourceQuota) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
-	if len(resourceQuota.Name) == 0 {
-		allErrs = append(allErrs, errs.NewFieldRequired("name", resourceQuota.Name))
-	} else if !util.IsDNSSubdomain(resourceQuota.Name) {
-		allErrs = append(allErrs, errs.NewFieldInvalid("name", resourceQuota.Name, dnsSubdomainErrorMsg))
-	}
-	if len(resourceQuota.Namespace) == 0 {
-		allErrs = append(allErrs, errs.NewFieldRequired("namespace", resourceQuota.Namespace))
-	} else if !util.IsDNSSubdomain(resourceQuota.Namespace) {
-		allErrs = append(allErrs, errs.NewFieldInvalid("namespace", resourceQuota.Namespace, dnsSubdomainErrorMsg))
-	}
+	allErrs = append(allErrs, ValidateObjectMeta(&resourceQuota.ObjectMeta, true, ValidateResourceQuotaName).Prefix("metadata")...)
+
 	for k := range resourceQuota.Spec.Hard {
 		allErrs = append(allErrs, validateResourceName(string(k), string(resourceQuota.TypeMeta.Kind))...)
 	}
@@ -836,6 +932,30 @@ func ValidateResourceQuota(resourceQuota *api.ResourceQuota) errs.ValidationErro
 	}
 	for k := range resourceQuota.Status.Used {
 		allErrs = append(allErrs, validateResourceName(string(k), string(resourceQuota.TypeMeta.Kind))...)
+	}
+	return allErrs
+}
+
+// ValidateNamespace tests if required fields are set.
+func ValidateNamespace(namespace *api.Namespace) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, ValidateObjectMeta(&namespace.ObjectMeta, false, ValidateNamespaceName).Prefix("metadata")...)
+	return allErrs
+}
+
+// ValidateNamespaceUpdate tests to make sure a mamespace update can be applied.  Modifies oldNamespace.
+func ValidateNamespaceUpdate(oldNamespace *api.Namespace, namespace *api.Namespace) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, ValidateObjectMetaUpdate(&oldNamespace.ObjectMeta, &namespace.ObjectMeta).Prefix("metadata")...)
+
+	// TODO: move reset function to its own location
+	// Ignore metadata changes now that they have been tested
+	oldNamespace.ObjectMeta = namespace.ObjectMeta
+
+	// TODO: Add a 'real' ValidationError type for this error and provide print actual diffs.
+	if !api.Semantic.DeepEqual(oldNamespace, namespace) {
+		glog.V(4).Infof("Update failed validation %#v vs %#v", oldNamespace, namespace)
+		allErrs = append(allErrs, fmt.Errorf("update contains more than labels or annotation changes"))
 	}
 	return allErrs
 }

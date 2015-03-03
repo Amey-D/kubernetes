@@ -51,6 +51,10 @@ func init() {
 		&ResourceQuota{},
 		&ResourceQuotaList{},
 		&ResourceQuotaUsage{},
+		&Namespace{},
+		&NamespaceList{},
+		&Secret{},
+		&SecretList{},
 	)
 	// Legacy names are supported
 	api.Scheme.AddKnownTypeWithName("v1beta3", "Minion", &Node{})
@@ -82,3 +86,7 @@ func (*LimitRangeList) IsAnAPIObject()            {}
 func (*ResourceQuota) IsAnAPIObject()             {}
 func (*ResourceQuotaList) IsAnAPIObject()         {}
 func (*ResourceQuotaUsage) IsAnAPIObject()        {}
+func (*Namespace) IsAnAPIObject()                 {}
+func (*NamespaceList) IsAnAPIObject()             {}
+func (*Secret) IsAnAPIObject()                    {}
+func (*SecretList) IsAnAPIObject()                {}

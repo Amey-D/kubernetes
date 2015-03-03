@@ -2,21 +2,24 @@ IaaS Provider  | Config. Mgmt | OS     | Docs                                   
 -------------- | ------------ | ------ | ----------------------------------------------------   | ---------------------------- | -----
 GCE            | Saltstack    | Debian | [docs](../../docs/getting-started-guides/gce.md)       | Project                      | Tested with 0.9.2 by @satnam6502
 Vagrant        | Saltstack    | Fedora | [docs](../../docs/getting-started-guides/vagrant.md)   | Project                      |
-Vagrant        |              | Fedora | [docs](../../docs/getting-started-guides/fedora/fedora_manual_config.md) | Project    | Uses K8s v0.5-8
-Vagrant        | Ansible      | Fedora | [docs](../../docs/getting-started-guides/fedora/fedora_ansible.md)       | Project    | Uses K8s v0.5-8
+Vagrant        | custom       | Fedora | [docs](../../docs/getting-started-guides/fedora/fedora_manual_config.md) | Project    | Uses K8s v0.5-8
+Vagrant        | Ansible      | Fedora | [docs](../../docs/getting-started-guides/fedora/fedora_ansible_config.md)       | Project    | Uses K8s v0.5-8
 GKE            |              |        | [docs](https://cloud.google.com/container-engine)      | Commercial                   | Uses K8s version 0.9.2
-AWS            | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community                    | Uses K8s version 0.9.1
-GCE            | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community (@kelseyhightower) | Uses K8s version 0.9.1
-Vagrant        | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community (@pires)           | Uses K8s version 0.9.1
+AWS            | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community                    | Uses K8s version 0.11.0
+GCE            | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community (@kelseyhightower) | Uses K8s version 0.11.0
+Vagrant        | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community (@pires)           | Uses K8s version 0.11.0
 CloudStack     | Ansible      | CoreOS | [docs](../../docs/getting-started-guides/cloudstack.md)| Community (@sebgoa)          | Uses K8s version 0.9.1
 Vmware         |              | Debian | [docs](../../docs/getting-started-guides/vsphere.md)   | Community (@pietern)         | Uses K8s version 0.9.1
 AWS            | Saltstack    | Ubuntu | [docs](../../docs/getting-started-guides/aws.md)       | Community (@justinsb)        | Uses K8s version 0.5.0
 Vmware         | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/coreos.md)    | Community (@kelseyhightower) |
 Azure          | Saltstack    | Ubuntu | [docs](../../docs/getting-started-guides/azure.md)     | Community (@jeffmendoza)     |
+Bare-metal     | custom       | Ubuntu | [docs](../../docs/getting-started-guides/ubuntu_single_node.md) | Community (@jainvipin)       |
+Bare-metal     | custom       | Ubuntu Cluster | [docs](../../docs/getting-started-guides/ubuntu_multinodes_cluster.md) | community (@resouer @WIZARD-CXY) | use k8s version 0.10.1
 Local          |              |        | [docs](../../docs/getting-started-guides/locally.md)   | Inactive                     |
 Ovirt          |              |        | [docs](../../docs/getting-started-guides/ovirt.md)     | Inactive                     |
 Rackspace      | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/rackspace.md) | Inactive                     |
-
+Bare-metal     | custom       | CentOS | [docs](../../docs/getting-started-guides/centos/centos_manual_config.md) | Community(@coolsvap)    | Uses K8s v0.9.1
+libvirt/KVM    | CoreOS       | CoreOS | [docs](../../docs/getting-started-guides/libvirt-coreos.md) | Community (@lhuard1A)   |
 Definition of columns:
   - **IaaS Provider** is who/what provides the virtual or physical machines (nodes) that Kubernetes runs on.
   - **OS** is the base operating system of the nodes.

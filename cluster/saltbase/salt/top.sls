@@ -25,6 +25,7 @@ base:
 {% else %}
     - sdn
 {% endif %}
+    - monit
 
   'roles:kubernetes-master':
     - match: grain
@@ -36,16 +37,18 @@ base:
     - monit
     - nginx
     - kube-client-tools
+{% if grains['cloud'] is defined and grains['cloud'] != 'vagrant' %}
     - logrotate
+{% endif %}
     - kube-addons
 {% if grains['cloud'] is defined and grains['cloud'] == 'azure' %}
     - openvpn
+{% endif %}
+{% if grains['cloud'] is defined and grains['cloud'] == 'vagrant' %}
+    - docker
+    - sdn
 {% endif %}
 
   'roles:kubernetes-pool-vsphere':
     - match: grain
     - static-routes
-
-  'roles:kubernetes-pool-vagrant':
-    - match: grain
-    - vagrant

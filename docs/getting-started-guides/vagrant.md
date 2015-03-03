@@ -71,7 +71,7 @@ vagrant provision
 To stop and then restart the cluster:
 ```
 vagrant halt
-vagrant up
+cluster/kube-up.sh
 ```
 
 To destroy the cluster:
@@ -276,7 +276,7 @@ You probably have an incorrect ~/.kubernetes_vagrant_auth file for the cluster y
 rm ~/.kubernetes_vagrant_auth
 ```
 
-After using kubecfg.sh make sure that the correct credentials are set:
+After using kubectl.sh make sure that the correct credentials are set:
 
 ```
 cat ~/.kubernetes_vagrant_auth

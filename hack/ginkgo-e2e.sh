@@ -93,14 +93,29 @@ elif [[ "${KUBERNETES_PROVIDER}" == "gke" ]]; then
   )
 elif [[ "${KUBERNETES_PROVIDER}" == "gce" ]]; then
   auth_config=(
-    "--auth_config=${HOME}/.kube/${INSTANCE_PREFIX}/kubernetes_auth"
+    "--auth_config=${HOME}/.kube/${PROJECT}_${INSTANCE_PREFIX}/kubernetes_auth"
+  )
+elif [[ "${KUBERNETES_PROVIDER}" == "aws" ]]; then
+  auth_config=(
+    "--auth_config=${HOME}/.kubernetes_auth"
   )
 else
   auth_config=()
 fi
 
+if [[ "$KUBERNETES_PROVIDER" == "libvirt-coreos" ]]; then
+    host="http://${KUBE_MASTER_IP-}:8080"
+else
+    host="https://${KUBE_MASTER_IP-}"
+fi
+
+# Use the kubectl binary from the same directory as the e2e binary.
+export PATH=$(dirname "${e2e}"):"${PATH}"
 "${e2e}" "${auth_config[@]:+${auth_config[@]}}" \
-  --host="https://${KUBE_MASTER_IP-}" \
+  --host="$host" \
   --provider="${KUBERNETES_PROVIDER}" \
+  --gce_project="${PROJECT:-}" \
+  --gce_zone="${ZONE:-}" \
+  --kube_master="${KUBE_MASTER:-}" \
   ${E2E_REPORT_DIR+"--report_dir=${E2E_REPORT_DIR}"} \
-  "${@}"
+  "${@:-}"
